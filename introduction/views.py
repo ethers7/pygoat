@@ -8,10 +8,8 @@ import os
 import pickle
 import random
 import re
-import shlex
 import socket
 import string
-import subprocess
 import uuid
 from urllib.parse import urlparse
 from dataclasses import dataclass
@@ -162,11 +160,8 @@ def sql_lab(request):
 
                 try:
                     print("\nin try\n")
-                    val=login.objects.raw(
-                        "SELECT * FROM introduction_login WHERE user=%s AND password=%s",
-                        [name, password]
-                    )
-                except:
+                    val = login.objects.filter(user=name, password=password)
+                except Exception:
                     print("\nin except\n")
                     return render(
                         request,
@@ -429,26 +424,25 @@ def cmd_lab(request):
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             os=request.POST.get('os')
             print(os)
-            if(os=='win'):
-                command=["nslookup", shlex.quote(domain)]
-            else:
-                command = ["dig", shlex.quote(domain)]
 
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
-                process = subprocess.Popen(
-                    command,
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
-                output = data + stderr
-                print(data + stderr)
-            except:
+                # Use Python's socket DNS resolution instead of subprocess
+                results = socket.getaddrinfo(domain, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+                output_lines = ["DNS lookup for: %s\n" % domain]
+                seen = set()
+                for family, socktype, proto, canonname, sockaddr in results:
+                    ip_addr = sockaddr[0]
+                    family_name = "IPv4" if family == socket.AF_INET else "IPv6"
+                    entry = "%s: %s" % (family_name, ip_addr)
+                    if entry not in seen:
+                        seen.add(entry)
+                        output_lines.append(entry)
+                output = "\n".join(output_lines)
+                print(output)
+            except socket.gaierror as e:
+                output = "DNS resolution failed: %s" % str(e)
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
@@ -881,11 +875,8 @@ def injection_sql_lab(request):
             sql_instance.save()
 
             try:
-                user = sql_lab_table.objects.raw(
-                    "SELECT * FROM introduction_sql_lab_table WHERE id=%s AND password=%s",
-                    [name, password]
-                )
-                user = user[0].id
+                user_qs = sql_lab_table.objects.filter(id=name, password=password)
+                user = user_qs[0].id
                 print(user)
 
             except:
@@ -962,23 +953,25 @@ def ssrf_target(request):
         return render(request,"Lab/ssrf/ssrf_target.html",{"access_denied":True})
 
 def _is_safe_url(url):
-    """Validate that a URL is safe to request (not targeting internal/private resources)."""
+    """Validate that a URL is safe to request (not targeting internal/private resources).
+    Returns the reconstructed safe URL string on success, or None if unsafe.
+    """
     try:
         parsed = urlparse(url)
     except Exception:
-        return False
+        return None
 
     if parsed.scheme not in ("http", "https"):
-        return False
+        return None
 
     hostname = parsed.hostname
     if not hostname:
-        return False
+        return None
 
     # Block obvious internal hostnames
     blocked_hostnames = {"localhost", "metadata.google.internal"}
     if hostname in blocked_hostnames or hostname.endswith(".internal"):
-        return False
+        return None
 
     # Resolve the hostname to an IP and check against private/reserved ranges
     try:
@@ -986,11 +979,13 @@ def _is_safe_url(url):
         for family, socktype, proto, canonname, sockaddr in resolved_ip:
             ip = ipaddress.ip_address(sockaddr[0])
             if ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local:
-                return False
+                return None
     except (socket.gaierror, ValueError):
-        return False
+        return None
 
-    return True
+    # Reconstruct a sanitized URL from parsed components
+    safe_url = parsed.geturl()
+    return safe_url
 
 
 @authentication_decorator
@@ -999,11 +994,12 @@ def ssrf_lab2(request):
         return render(request, "Lab/ssrf/ssrf_lab2.html")
 
     elif request.method == "POST":
-        url = request.POST["url"]
-        if not _is_safe_url(url):
+        raw_url = request.POST["url"]
+        safe_url = _is_safe_url(raw_url)
+        if safe_url is None:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
         try:
-            response = requests.get(url)
+            response = requests.get(safe_url)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
         except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
