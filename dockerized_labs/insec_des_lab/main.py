@@ -1,3 +1,5 @@
+import os
+
 from flask import Flask, render_template, request, make_response
 import json
 import base64
@@ -43,6 +45,10 @@ def deserialize_data():
         return render_template('result.html', message=f"Error: {str(e)}")
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
+    app.run(
+        host=os.environ.get('HOST', '127.0.0.1'),
+        port=int(os.environ.get('PORT', 8080)),
+        debug=os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
+    )
 
     
