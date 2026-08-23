@@ -427,9 +427,9 @@ def cmd_lab(request):
             os=request.POST.get('os')
             print(os)
             if(os=='win'):
-                command=["nslookup", domain]
+                command=["nslookup", shlex.quote(domain)]
             else:
-                command = ["dig", domain]
+                command = ["dig", shlex.quote(domain)]
 
             try:
                 # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
