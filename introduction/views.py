@@ -162,7 +162,7 @@ def sql_lab(request):
                 print(sql_query)
                 try:
                     print("\nin try\n")
-                    val=login.objects.raw("SELECT * FROM introduction_login WHERE user=%s AND password=%s", [name, password])
+                    val=login.objects.filter(user=name, password=password)
                 except:
                     print("\nin except\n")
                     return render(
@@ -415,24 +415,13 @@ def cmd(request):
         return redirect('login')
 @csrf_exempt
 def cmd_lab(request):
-    # Allowlist of permitted DNS lookup commands keyed by OS choice
-    ALLOWED_COMMANDS = {
-        'win': '/usr/bin/nslookup',
-        'linux': '/usr/bin/dig',
-    }
-
     if request.user.is_authenticated:
         if(request.method=="POST"):
             domain=request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            os=request.POST.get('os')
-            print(os)
-
-            # Validate os parameter against the allowlist
-            if os not in ALLOWED_COMMANDS:
-                os = 'linux'
-            executable = ALLOWED_COMMANDS[os]
+            os_choice=request.POST.get('os')
+            print(os_choice)
 
             # Validate domain: only allow valid domain name characters
             if not domain or not re.match(r'^[a-zA-Z0-9._-]+$', domain):
@@ -440,11 +429,19 @@ def cmd_lab(request):
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
             try:
-                process = subprocess.Popen(
-                    [executable, domain],
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
+                # Use hardcoded executable paths; os_choice only selects between them
+                if os_choice == 'win':
+                    process = subprocess.Popen(
+                        ["/usr/bin/nslookup", domain],
+                        shell=False,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE)
+                else:
+                    process = subprocess.Popen(
+                        ["/usr/bin/dig", domain],
+                        shell=False,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
                 data = stdout.decode('utf-8')
                 stderr = stderr.decode('utf-8')
@@ -886,7 +883,7 @@ def injection_sql_lab(request):
             print(sql_query)
 
             try:
-                user = sql_lab_table.objects.raw("SELECT * FROM introduction_sql_lab_table WHERE id=%s AND password=%s", [name, password])
+                user = sql_lab_table.objects.filter(id=name, password=password)
                 user = user[0].id
                 print(user)
 
@@ -1009,7 +1006,22 @@ def ssrf_lab2(request):
         if not _is_safe_url(url):
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "URL not allowed"})
         try:
-            response = requests.get(url)
+            # Reconstruct the URL from parsed components to prevent TOCTOU bypass
+            parsed = urllib.parse.urlparse(url)
+            hostname = parsed.hostname
+            # Strict domain allowlist check (defense-in-depth, also checked in _is_safe_url)
+            if hostname not in SSRF_ALLOWED_HOSTS:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "URL not allowed"})
+            # Build a safe URL from only the validated components
+            safe_url = urllib.parse.urlunparse((
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                parsed.params,
+                parsed.query,
+                '',
+            ))
+            response = requests.get(safe_url, allow_redirects=False, timeout=5)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
         except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
