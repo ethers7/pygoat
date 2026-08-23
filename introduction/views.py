@@ -7,17 +7,16 @@ import logging
 import os
 import random
 import re
-import shlex
 import socket
 import string
-import subprocess
 import urllib.parse
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
 from random import randint
-from xml.dom.pulldom import START_ELEMENT
+# START_ELEMENT is a string constant used by pulldom event parsing
+START_ELEMENT = "START_ELEMENT"
 
 from defusedxml.pulldom import parseString
 
@@ -158,22 +157,20 @@ def sql_lab(request):
 
             if login.objects.filter(user=name):
 
-                sql_query = "SELECT * FROM introduction_login WHERE user=%s AND password=%s"
-                print(sql_query)
                 try:
                     print("\nin try\n")
-                    val=login.objects.raw(sql_query, [name, password])
-                except:
+                    val = login.objects.filter(user=name, password=password)
+                except Exception:
                     print("\nin except\n")
                     return render(
-                        request, 
+                        request,
                         'Lab/SQL/sql_lab.html',
                         {
                             "wrongpass":password,
-                            "sql_error":sql_query
+                            "sql_error":"query failed"
                         })
 
-                if val:
+                if val.exists():
                     user=val[0].user
                     return render(request, 'Lab/SQL/sql_lab.html',{"user1":user})
                 else:
@@ -423,29 +420,22 @@ def cmd_lab(request):
             if not re.match(r'^[a-zA-Z0-9._-]+$', domain):
                 output = "Invalid domain name"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
-            os=request.POST.get('os')
-            print(os)
-            # Allowlist of permitted DNS lookup commands
-            allowed_commands = {
-                'win': 'nslookup',
-                'linux': 'dig',
-            }
-            cmd_name = allowed_commands.get(os, 'dig')
-
             try:
-                process = subprocess.Popen(
-                    [cmd_name, domain],
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
-                output = data + stderr
-                print(data + stderr)
-            except:
+                # Pure-Python DNS resolution — no subprocess needed
+                addr_info = socket.getaddrinfo(domain, None)
+                results = []
+                seen = set()
+                for family, stype, proto, canonname, sockaddr in addr_info:
+                    ip = sockaddr[0]
+                    if ip not in seen:
+                        seen.add(ip)
+                        results.append(f"{domain} has address {ip}")
+                output = "\n".join(results) if results else f"No DNS records found for {domain}"
+                print(output)
+            except socket.gaierror as e:
+                output = f"DNS resolution failed for {domain}: {e}"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
@@ -867,8 +857,6 @@ def injection_sql_lab(request):
         print(password)
 
         if name:
-            sql_query = "SELECT * FROM introduction_sql_lab_table WHERE id=%s AND password=%s"
-
             sql_instance = sql_lab_table(id="admin", password="65079b006e85a7e798abecb99e47c154")
             sql_instance.save()
             sql_instance = sql_lab_table(id="jack", password="jack")
@@ -878,20 +866,18 @@ def injection_sql_lab(request):
             sql_instance = sql_lab_table(id="bloke", password="f8d1ce191319ea8f4d1d26e65e130dd5")
             sql_instance.save()
 
-            print(sql_query)
-
             try:
-                user = sql_lab_table.objects.raw(sql_query, [name, password])
-                user = user[0].id
+                user_qs = sql_lab_table.objects.filter(id=name, password=password)
+                user = user_qs[0].id
                 print(user)
 
-            except:
+            except Exception:
                 return render(
-                    request, 
+                    request,
                     'Lab_2021/A3_Injection/sql_lab.html',
                     {
                         "wrongpass":password,
-                        "sql_error":sql_query
+                        "sql_error":"query failed"
                     })
 
             if user:
@@ -995,8 +981,13 @@ def ssrf_lab2(request):
         if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_reserved:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Access to internal resources is not allowed"})
 
+        # Reconstruct URL from validated/parsed components to avoid raw user input reaching requests.get
+        validated_path = parsed.path if parsed.path else "/"
+        validated_query = f"?{parsed.query}" if parsed.query else ""
+        validated_url = f"{parsed.scheme}://{parsed.hostname}{validated_path}{validated_query}"
+
         try:
-            response = requests.get(url)
+            response = requests.get(validated_url, timeout=10, allow_redirects=False)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
         except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
