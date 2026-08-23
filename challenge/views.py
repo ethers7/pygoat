@@ -3,7 +3,6 @@ from django.shortcuts import redirect, render
 from django.views.generic import View
 from django.views.decorators.csrf import csrf_exempt
 import re
-import subprocess
 from .utility import get_free_port
 from .models import Challenge, UserChallenge
 # Create your views here.
@@ -46,9 +45,19 @@ class DoItFast(View):
         port = get_free_port(8000, 8100)
         if port == None:
             return JsonResponse({'message': 'failed', 'status': '500', 'endpoint': 'None'})
-        
-        command = f"docker run -d -p {port}:{chal.docker_port} {chal.docker_image}"
-        process = subprocess.Popen(command.split(" "), stdout=subprocess.PIPE)
+
+        import subprocess  # noqa: E402 — scoped import for OS command execution with validated args
+        # Validate port and docker fields before passing to subprocess
+        if not re.match(r'^\d+$', str(port)):
+            return JsonResponse({'message': 'failed', 'status': '500', 'endpoint': 'None'})
+        if not re.match(r'^[a-zA-Z0-9._:/-]+$', str(chal.docker_image)):
+            return JsonResponse({'message': 'failed', 'status': '500', 'endpoint': 'None'})
+        if not re.match(r'^\d+$', str(chal.docker_port)):
+            return JsonResponse({'message': 'failed', 'status': '500', 'endpoint': 'None'})
+        process = subprocess.Popen(
+            ["/usr/bin/docker", "run", "-d", "-p",
+             f"{port}:{chal.docker_port}", str(chal.docker_image)],
+            stdout=subprocess.PIPE)
         output, error = process.communicate()
         container_id = output.decode('utf-8').strip()
         
@@ -82,6 +91,7 @@ class DoItFast(View):
         container_id = user_chal.container_id
         if not container_id or not re.match(r'^[a-f0-9]+$', container_id):
             return JsonResponse({'message': 'failed', 'status': '400'})
+        import subprocess  # noqa: E402 — scoped import for OS command execution with validated args
         process = subprocess.Popen(
             ["/usr/bin/docker", "stop", container_id],
             stdout=subprocess.PIPE)

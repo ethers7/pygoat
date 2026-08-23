@@ -1039,19 +1039,9 @@ def ssti_lab(request):
             blog = filter_blog(blog)
             # Escape user-supplied HTML content to prevent XSS/injection
             blog = escape(blog)
-            prepend_code = "{% extends 'introduction/base.html' %}\
-                {% block content %}{% block title %}\
-                <title>SSTI-Blogs</title>\
-                {% endblock %}"
-
-            blog = prepend_code + blog + "{% endblock %}"
-            new_blog = Blogs.objects.create(author = request.user, blog_id = id)
-            new_blog.save() 
-            dirname = os.path.dirname(__file__)
-            filename = os.path.join(dirname, f"templates/Lab_2021/A3_Injection/Blogs/{id}.html")
-            file = open(filename, "w+") 
-            file.write(blog)
-            file.close()
+            # Store blog content in the database instead of writing to a file
+            new_blog = Blogs.objects.create(author=request.user, blog_id=id, content=blog)
+            new_blog.save()
             return redirect(f'blog/{id}')
     else:
         return redirect('login')
@@ -1060,7 +1050,14 @@ def ssti_lab(request):
 def ssti_view_blog(request,blog_id):
     if request.user.is_authenticated:
         if request.method=="GET":
-            return render(request,f"Lab_2021/A3_Injection/Blogs/{blog_id}.html")
+            # Validate blog_id is a hex string to prevent path traversal
+            if not re.match(r'^[a-f0-9]+$', blog_id):
+                return HttpResponseBadRequest()
+            try:
+                blog_obj = Blogs.objects.get(blog_id=blog_id)
+            except Blogs.DoesNotExist:
+                return HttpResponseBadRequest()
+            return render(request, "Lab_2021/A3_Injection/ssti_blog_view.html", {"blog_content": blog_obj.content})
         elif request.method=="POST":
             return HttpResponseBadRequest()
 
