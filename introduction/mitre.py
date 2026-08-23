@@ -1,4 +1,6 @@
+import ast
 import datetime
+import operator
 import re
 import shlex
 import subprocess
@@ -210,11 +212,50 @@ def csrf_transfer_monei_api(request,recipent,amount):
         return redirect ('/mitre/9/lab/transaction')
 
 
+# Safe arithmetic evaluator using AST
+_SAFE_OPERATORS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+    ast.USub: operator.neg,
+    ast.UAdd: operator.pos,
+}
+
+
+def _safe_eval_expr(node):
+    """Evaluate an arithmetic expression AST node safely."""
+    if isinstance(node, ast.Expression):
+        return _safe_eval_expr(node.body)
+    elif isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return node.value
+    elif isinstance(node, ast.BinOp) and type(node.op) in _SAFE_OPERATORS:
+        left = _safe_eval_expr(node.left)
+        right = _safe_eval_expr(node.right)
+        return _SAFE_OPERATORS[type(node.op)](left, right)
+    elif isinstance(node, ast.UnaryOp) and type(node.op) in _SAFE_OPERATORS:
+        operand = _safe_eval_expr(node.operand)
+        return _SAFE_OPERATORS[type(node.op)](operand)
+    else:
+        raise ValueError("Unsupported expression")
+
+
+def _safe_math_eval(expression):
+    """Parse and evaluate a math expression string safely."""
+    tree = ast.parse(expression, mode='eval')
+    return _safe_eval_expr(tree)
+
+
 # @authentication_decorator
 def mitre_lab_25_api(request):
     if request.method == "POST":
         expression = request.POST.get('expression')
-        result = eval(expression)
+        try:
+            result = _safe_math_eval(expression)
+        except (ValueError, SyntaxError, TypeError, ZeroDivisionError):
+            return JsonResponse({'error': 'Invalid expression'}, status=400)
         return JsonResponse({'result': result})
     else:
         return redirect('/mitre/25/lab/')

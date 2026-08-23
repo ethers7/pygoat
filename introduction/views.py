@@ -1,3 +1,4 @@
+import ast
 import base64
 import datetime
 import hashlib
@@ -7,6 +8,7 @@ import logging
 import os
 import random
 import re
+import secrets
 import shlex
 import socket
 import string
@@ -30,6 +32,7 @@ from django.contrib.auth import authenticate, login
 from django.contrib.auth.forms import UserCreationForm
 from django.core import serializers
 from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
+from django.utils.html import escape
 from django.shortcuts import redirect, render
 from django.template import loader
 from django.template.loader import render_to_string
@@ -455,11 +458,11 @@ def cmd_lab2(request):
     if request.user.is_authenticated:
         if (request.method=="POST"):
             val=request.POST.get('val')
-            
+
             print(val)
             try:
-                output = eval(val)
-            except:
+                output = ast.literal_eval(val)
+            except (ValueError, SyntaxError):
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab2.html',{"output":output})
             print("Output = ", output)
@@ -537,7 +540,7 @@ def secret(request):
     if(XHost == 'admin.localhost:8000'):
         return render(request,"Lab/sec_mis/sec_mis_lab.html", {"secret": "S3CR37K3Y"})
     else:
-        return render(request,"Lab/sec_mis/sec_mis_lab.html", {"no_secret": "Only admin.localhost:8000 can access, Your X-Host is " + XHost})
+        return render(request,"Lab/sec_mis/sec_mis_lab.html", {"no_secret": "Only admin.localhost:8000 can access, Your X-Host is " + escape(XHost)})
 
 
 #**********************************************************A9*************************************************#
@@ -569,23 +572,29 @@ def a9_lab(request):
 def get_version(request):
       return render(request,"Lab/A9/a9_lab.html",{"version":"pyyaml v5.1"})
 
+_ALLOWED_IMAGEMATH_PATTERN = re.compile(
+    r"^convert\(\s*[rgb]\s*[+\-*/]\s*[rgb]\s*,\s*'[01L]'\s*\)$"
+)
+
 def a9_lab2(request):
     if not request.user.is_authenticated:
         return redirect('login')
-    
+
     if request.method == "GET":
         return render (request,"Lab/A9/a9_lab2.html")
     elif request.method == "POST":
         try :
             file=request.FILES["file"]
             function_str = request.POST.get("function")
+            # Validate function_str against an allowlist of safe ImageMath expressions
+            if not function_str or not _ALLOWED_IMAGEMATH_PATTERN.match(function_str):
+                return render(request, "Lab/A9/a9_lab2.html", {"data": "Invalid expression. Use: convert(r+g, '1')", "error": True})
             img  = Image.open(file)
             img = img.convert("RGB")
             r,g,b  = img.split()
-            # function_str = "convert(r+g, '1')"
-            output = ImageMath.eval(function_str,img = img, b=b, r=r, g=g)
+            output = ImageMath.eval(function_str, img=img, b=b, r=r, g=g)
 
-            # saving the image 
+            # saving the image
             buffered = BytesIO()
             output.save(buffered, format="JPEG")
             img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
@@ -675,7 +684,8 @@ def a10_lab2(request):
 #*********************************************************A11*************************************************#
 
 def gentckt():
-    return (''.join(random.choices(string.ascii_uppercase + string.ascii_lowercase, k=10)))
+    alphabet = string.ascii_uppercase + string.ascii_lowercase
+    return ''.join(secrets.choice(alphabet) for _ in range(10))
 
 def insec_desgine(request):
     if request.user.is_authenticated:
@@ -698,8 +708,12 @@ def insec_desgine_lab(request):
                 Tickets.append(tkt.tickit)
             try :
                 count = request.POST.get("count")
-                if (int(count)+len(tkts)) <=5:
-                    for i in range(int(count)):
+                count = int(count)
+                # Bound resource consumption: enforce positive count within limit
+                if count < 0:
+                    count = 0
+                if (count+len(tkts)) <=5:
+                    for i in range(count):
                         ticket_code = gentckt()
                         Tickets.append(ticket_code)
                         T = tickits(user = request.user, tickit = ticket_code)
@@ -916,7 +930,12 @@ def ssrf_lab(request):
             file=request.POST["blog"]
             try :
                 dirname = os.path.dirname(__file__)
-                filename = os.path.join(dirname, file)
+                # Prevent path traversal by using only the base filename
+                safe_name = os.path.basename(file)
+                filename = os.path.join(dirname, safe_name)
+                # Ensure resolved path stays within the allowed directory
+                if not os.path.realpath(filename).startswith(os.path.realpath(dirname)):
+                    return render(request, "Lab/ssrf/ssrf_lab.html", {"blog": "Invalid path"})
                 file = open(filename,"r")
                 data = file.read()
                 return render(request,"Lab/ssrf/ssrf_lab.html",{"blog":data})
