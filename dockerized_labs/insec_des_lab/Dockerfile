@@ -12,4 +12,10 @@ ENV FLASK_RUN_HOST=0.0.0.0
 
 EXPOSE 8080
 
+# Create a non-root user and grant access to app files
+RUN adduser --disabled-password --gecos '' appuser \
+    && chown -R appuser:appuser /app
+
+USER appuser
+
 CMD ["flask", "run", "--debug", "--port=8080"]
