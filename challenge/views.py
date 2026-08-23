@@ -2,6 +2,7 @@ from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.views.generic import View
 from django.views.decorators.csrf import csrf_exempt
+import os
 import re
 from .utility import get_free_port
 from .models import Challenge, UserChallenge
@@ -46,20 +47,15 @@ class DoItFast(View):
         if port == None:
             return JsonResponse({'message': 'failed', 'status': '500', 'endpoint': 'None'})
 
-        import subprocess  # noqa: E402 — scoped import for OS command execution with validated args
-        # Validate port and docker fields before passing to subprocess
         if not re.match(r'^\d+$', str(port)):
             return JsonResponse({'message': 'failed', 'status': '500', 'endpoint': 'None'})
         if not re.match(r'^[a-zA-Z0-9._:/-]+$', str(chal.docker_image)):
             return JsonResponse({'message': 'failed', 'status': '500', 'endpoint': 'None'})
         if not re.match(r'^\d+$', str(chal.docker_port)):
             return JsonResponse({'message': 'failed', 'status': '500', 'endpoint': 'None'})
-        process = subprocess.Popen(
-            ["/usr/bin/docker", "run", "-d", "-p",
-             f"{port}:{chal.docker_port}", str(chal.docker_image)],
-            stdout=subprocess.PIPE)
-        output, error = process.communicate()
-        container_id = output.decode('utf-8').strip()
+        docker_cmd = f"/usr/bin/docker run -d -p {port}:{chal.docker_port} {chal.docker_image}"
+        with os.popen(docker_cmd) as proc:
+            container_id = proc.read().strip()
         
         if user_chall_exists:
             # TODO : reuse the container instead of creaing the new one
@@ -91,11 +87,7 @@ class DoItFast(View):
         container_id = user_chal.container_id
         if not container_id or not re.match(r'^[a-f0-9]+$', container_id):
             return JsonResponse({'message': 'failed', 'status': '400'})
-        import subprocess  # noqa: E402 — scoped import for OS command execution with validated args
-        process = subprocess.Popen(
-            ["/usr/bin/docker", "stop", container_id],
-            stdout=subprocess.PIPE)
-        output, error = process.communicate()
+        os.popen(f"/usr/bin/docker stop {container_id}").read()
         return JsonResponse({'message': 'success', 'status': '200'})
     
     def put(self, request, challange):
