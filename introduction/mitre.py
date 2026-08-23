@@ -2,8 +2,7 @@ import ast
 import datetime
 import operator
 import re
-import shlex
-import subprocess
+import socket
 from hashlib import sha256
 
 import jwt
@@ -269,18 +268,39 @@ def mitre_lab_25(request):
 def mitre_lab_17(request):
     return render(request, 'mitre/mitre_lab_17.html')
 
-def command_out(command):
-    process = subprocess.Popen(shlex.split(command), shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    return process.communicate()
-    
+COMMON_PORTS = [21, 22, 23, 25, 53, 80, 110, 143, 443, 445, 993, 995, 3306, 3389, 5432, 8080, 8443]
+
+
+def _scan_ports(host, ports=None, timeout=1):
+    """Scan common ports on a host using Python sockets."""
+    if ports is None:
+        ports = COMMON_PORTS
+    open_ports = []
+    for port in ports:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(timeout)
+                if s.connect_ex((host, port)) == 0:
+                    try:
+                        service = socket.getservbyport(port, 'tcp')
+                    except OSError:
+                        service = 'unknown'
+                    open_ports.append(f"{port}/tcp  open  {service}")
+        except (socket.error, OSError):
+            continue
+    return open_ports
+
 
 def mitre_lab_17_api(request):
     if request.method == "POST":
         ip = request.POST.get('ip')
-        command = "nmap " + ip 
-        res, err = command_out(command)
-        res = res.decode()
-        err = err.decode()
-        pattern = "STATE SERVICE.*\\n\\n"
-        ports = re.findall(pattern, res,re.DOTALL)[0][14:-2].split('\n')
-        return JsonResponse({'raw_res': str(res), 'raw_err': str(err), 'ports': ports})
+        # Validate input: only allow valid hostname/IP characters
+        if not ip or not re.match(r'^[a-zA-Z0-9._-]+$', ip):
+            return JsonResponse({'raw_res': '', 'raw_err': 'Invalid host', 'ports': []})
+        try:
+            open_ports = _scan_ports(ip)
+            res = f"PORT  STATE SERVICE\n" + "\n".join(open_ports) if open_ports else "No open ports found"
+            ports = open_ports
+            return JsonResponse({'raw_res': res, 'raw_err': '', 'ports': ports})
+        except Exception as e:
+            return JsonResponse({'raw_res': '', 'raw_err': str(e), 'ports': []})

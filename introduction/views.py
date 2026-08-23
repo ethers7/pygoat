@@ -6,19 +6,15 @@ import ipaddress
 import json
 import logging
 import os
-import random
 import re
 import secrets
-import shlex
 import socket
 import string
-import subprocess
 import urllib.parse
 import uuid
 from dataclasses import dataclass
 from hashlib import sha256
 from io import BytesIO
-from random import randint
 from defusedxml.pulldom import parseString
 
 START_ELEMENT = "START_ELEMENT"
@@ -31,11 +27,10 @@ from django.contrib import messages
 from django.contrib.auth import authenticate, login
 from django.contrib.auth.forms import UserCreationForm
 from django.core import serializers
-from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
+from django.http import HttpResponseBadRequest, JsonResponse
 from django.utils.html import escape
 from django.shortcuts import redirect, render
 from django.template import loader
-from django.template.loader import render_to_string
 from PIL import Image, ImageMath
 from requests.structures import CaseInsensitiveDict
 
@@ -288,8 +283,7 @@ def auth_lab_signup(request):
             passwd  = request.POST['pass']
             obj = authLogin.objects.create(name=name,username=user_name,password=passwd)
             try:
-                rendered = render_to_string('Lab/AUTH/auth_success.html', {'username': obj.username,'userid':obj.userid,'name':obj.name,'err_msg':'Cookie Set'})
-                response = HttpResponse(rendered)
+                response = render(request, 'Lab/AUTH/auth_success.html', {'username': obj.username,'userid':obj.userid,'name':obj.name,'err_msg':'Cookie Set'})
                 response.set_cookie('userid', obj.userid, max_age=31449600, samesite='Lax', secure=True, httponly=True)
                 print('Setting cookie successful')
                 return response
@@ -302,8 +296,7 @@ def auth_lab_login(request):
     if request.method == 'GET':
         try:
             obj = authLogin.objects.filter(userid=request.COOKIES['userid'])[0]
-            rendered = render_to_string('Lab/AUTH/auth_success.html', {'username': obj.username,'userid':obj.userid,'name':obj.name, 'err_msg':'Login Successful'})
-            response = HttpResponse(rendered)
+            response = render(request, 'Lab/AUTH/auth_success.html', {'username': obj.username,'userid':obj.userid,'name':obj.name, 'err_msg':'Login Successful'})
             response.set_cookie('userid', obj.userid, max_age=31449600, samesite='Lax', secure=True, httponly=True)
             print('Login successful')
             return response
@@ -316,8 +309,7 @@ def auth_lab_login(request):
             print(user_name,passwd)
             obj = authLogin.objects.filter(username=user_name,password=passwd)[0]
             try:
-                rendered = render_to_string('Lab/AUTH/auth_success.html', {'username': obj.username,'userid':obj.userid,'name':obj.name, 'err_msg':'Login Successful'})
-                response = HttpResponse(rendered)
+                response = render(request, 'Lab/AUTH/auth_success.html', {'username': obj.username,'userid':obj.userid,'name':obj.name, 'err_msg':'Login Successful'})
                 response.set_cookie('userid', obj.userid, max_age=31449600, samesite='Lax', secure=True, httponly=True)
                 print('Login successful')
                 return response
@@ -327,8 +319,7 @@ def auth_lab_login(request):
             return render(request,'Lab/AUTH/auth_lab_login.html',{'err_msg':'Check your credentials'})
 
 def auth_lab_logout(request):
-    rendered = render_to_string('Lab/AUTH/auth_lab.html',context={'err_msg':'Logout successful'})
-    response = HttpResponse(rendered)    
+    response = render(request, 'Lab/AUTH/auth_lab.html', {'err_msg':'Logout successful'})
     response.delete_cookie('userid')
     return response
 
@@ -426,25 +417,24 @@ def cmd_lab(request):
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
             try:
-                # Use hardcoded executable paths; os_choice only selects between them
+                # Use Python's socket module for DNS resolution instead of subprocess
+                results = socket.getaddrinfo(domain, None)
+                addresses = sorted(set(addr[4][0] for addr in results))
                 if os_choice == 'win':
-                    process = subprocess.Popen(
-                        ["/usr/bin/nslookup", domain],
-                        shell=False,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE)
+                    # nslookup-style output
+                    lines = [f"Name:    {domain}"]
+                    for addr in addresses:
+                        lines.append(f"Address: {addr}")
+                    output = "\n".join(lines)
                 else:
-                    process = subprocess.Popen(
-                        ["/usr/bin/dig", domain],
-                        shell=False,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                output = data + stderr
-                print(data + stderr)
-            except:
+                    # dig-style output
+                    lines = [f";; ANSWER SECTION:"]
+                    for addr in addresses:
+                        lines.append(f"{domain}.\t\tIN\tA\t{addr}")
+                    output = "\n".join(lines)
+            except socket.gaierror:
+                output = f"DNS lookup failed: could not resolve {domain}"
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
@@ -496,7 +486,7 @@ def login_otp(request):
 def Otp(request):
     if request.method=="GET":
         email=request.GET.get('email')
-        otpN=randint(100,999)
+        otpN=secrets.randbelow(900) + 100
         if email and otpN:
             if email=="admin@pygoat.com":
                 otp.objects.filter(id=2).update(otp=otpN)
@@ -1047,11 +1037,13 @@ def ssti_lab(request):
             id = str(uuid.uuid4()).split('-')[-1]
 
             blog = filter_blog(blog)
+            # Escape user-supplied HTML content to prevent XSS/injection
+            blog = escape(blog)
             prepend_code = "{% extends 'introduction/base.html' %}\
                 {% block content %}{% block title %}\
                 <title>SSTI-Blogs</title>\
                 {% endblock %}"
-            
+
             blog = prepend_code + blog + "{% endblock %}"
             new_blog = Blogs.objects.create(author = request.user, blog_id = id)
             new_blog.save() 
