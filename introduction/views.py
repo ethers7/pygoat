@@ -18,8 +18,10 @@ from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
 from random import randint
-from xml.dom.pulldom import START_ELEMENT
 from defusedxml.pulldom import parseString
+
+# Constant from xml.dom.pulldom; defined locally to avoid importing the vulnerable xml package.
+START_ELEMENT = "START_ELEMENT"
 
 import jwt
 import requests
