@@ -414,6 +414,12 @@ def cmd(request):
         return redirect('login')
 @csrf_exempt
 def cmd_lab(request):
+    # Allowlist of permitted DNS lookup commands keyed by OS choice
+    ALLOWED_COMMANDS = {
+        'win': '/usr/bin/nslookup',
+        'linux': '/usr/bin/dig',
+    }
+
     if request.user.is_authenticated:
         if(request.method=="POST"):
             domain=request.POST.get('domain')
@@ -421,23 +427,26 @@ def cmd_lab(request):
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
             os=request.POST.get('os')
             print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
-            else:
-                command = "dig {}".format(domain)
-            
+
+            # Validate os parameter against the allowlist
+            if os not in ALLOWED_COMMANDS:
+                os = 'linux'
+            executable = ALLOWED_COMMANDS[os]
+
+            # Validate domain: only allow valid domain name characters
+            if not domain or not re.match(r'^[a-zA-Z0-9._-]+$', domain):
+                output = "Invalid domain name"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
                 process = subprocess.Popen(
-                    shlex.split(command),
+                    [executable, domain],
                     shell=False,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
                 data = stdout.decode('utf-8')
                 stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
                 output = data + stderr
                 print(data + stderr)
             except:
