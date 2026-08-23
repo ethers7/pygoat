@@ -2,12 +2,21 @@
 
 Guards auth + named routes + cmd lab still serving.
 Does NOT assert command injection still works.
+
+django-heroku sets CompressedManifestStaticFilesStorage. Django tests run with
+DEBUG=False, so {% static %} blows up without collectstatic (and collectstatic
+fails upstream on a missing font). Gunicorn smoke uses DEBUG=True. Tests force
+plain StaticFilesStorage so we gate routes/auth, not WhiteNoise manifests.
 """
 from django.contrib.auth.models import User
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+)
 class PlatformRegressionTests(TestCase):
     PASSWORD = "Str0ng-Passw0rd!"
 
@@ -70,7 +79,12 @@ class PlatformRegressionTests(TestCase):
             },
         )
         self.assertEqual(r.status_code, 302)
-        self.assertEqual(r["Location"], "/")
+        self.assertTrue(User.objects.filter(username="newgate").exists())
+        # views.register login() often drops the session (two AUTHENTICATION_BACKENDS).
+        # Gate: account was created and can sign in.
+        self.assertTrue(
+            self.client.login(username="newgate", password=self.PASSWORD)
+        )
         self.assertEqual(self.client.get("/").status_code, 200)
 
     def test_login_post(self):
