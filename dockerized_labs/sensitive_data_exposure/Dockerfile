@@ -14,6 +14,12 @@ RUN chmod +x /entrypoint.sh
 
 EXPOSE 8000
 
+# Create a non-root application user and grant ownership of app files
+RUN adduser --disabled-password --gecos "" appuser && \
+    chown -R appuser:appuser /app /entrypoint.sh
+
+USER appuser
+
 # Use the entrypoint script
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
