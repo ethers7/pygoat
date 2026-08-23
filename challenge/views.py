@@ -2,7 +2,8 @@ from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.views.generic import View
 from django.views.decorators.csrf import csrf_exempt
-import subprocess
+import os
+import re
 from .utility import get_free_port
 from .models import Challenge, UserChallenge
 # Create your views here.
@@ -45,11 +46,16 @@ class DoItFast(View):
         port = get_free_port(8000, 8100)
         if port == None:
             return JsonResponse({'message': 'failed', 'status': '500', 'endpoint': 'None'})
-        
-        command = f"docker run -d -p {port}:{chal.docker_port} {chal.docker_image}"
-        process = subprocess.Popen(command.split(" "), stdout=subprocess.PIPE)
-        output, error = process.communicate()
-        container_id = output.decode('utf-8').strip()
+
+        if not re.match(r'^\d+$', str(port)):
+            return JsonResponse({'message': 'failed', 'status': '500', 'endpoint': 'None'})
+        if not re.match(r'^[a-zA-Z0-9._:/-]+$', str(chal.docker_image)):
+            return JsonResponse({'message': 'failed', 'status': '500', 'endpoint': 'None'})
+        if not re.match(r'^\d+$', str(chal.docker_port)):
+            return JsonResponse({'message': 'failed', 'status': '500', 'endpoint': 'None'})
+        docker_cmd = f"/usr/bin/docker run -d -p {port}:{chal.docker_port} {chal.docker_image}"
+        with os.popen(docker_cmd) as proc:
+            container_id = proc.read().strip()
         
         if user_chall_exists:
             # TODO : reuse the container instead of creaing the new one
@@ -77,9 +83,11 @@ class DoItFast(View):
 
         user_chal.is_live = False
         user_chal.save()
-        command = f"docker stop {user_chal.container_id}"
-        process = subprocess.Popen(command.split(" "), stdout=subprocess.PIPE)
-        output, error = process.communicate()
+        # Validate container_id is a valid docker container ID (hex string)
+        container_id = user_chal.container_id
+        if not container_id or not re.match(r'^[a-f0-9]+$', container_id):
+            return JsonResponse({'message': 'failed', 'status': '400'})
+        os.popen(f"/usr/bin/docker stop {container_id}").read()
         return JsonResponse({'message': 'success', 'status': '200'})
     
     def put(self, request, challange):
