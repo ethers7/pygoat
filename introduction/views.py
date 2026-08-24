@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 import os
-import pickle
 import random
 import re
 import string
@@ -199,19 +198,24 @@ def insec_des(request):
 @dataclass
 class TestUser:
     admin: int = 0
-pickled_user = pickle.dumps(TestUser())
-encoded_user = base64.b64encode(pickled_user)
+default_user_json = base64.b64encode(json.dumps({"admin": 0}).encode('utf-8'))
 
 def insec_des_lab(request):
     if request.user.is_authenticated:
         response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Only Admins can see this page"})
         token = request.COOKIES.get('token')
         if token == None:
-            token = encoded_user
+            token = default_user_json
             response.set_cookie(key='token',value=token.decode('utf-8'))
         else:
             token = base64.b64decode(token)
-            admin = pickle.loads(token)
+            try:
+                data = json.loads(token)
+                if not isinstance(data, dict) or "admin" not in data:
+                    data = {"admin": 0}
+                admin = TestUser(admin=int(data.get("admin", 0)))
+            except (json.JSONDecodeError, ValueError, TypeError):
+                admin = TestUser()
             if admin.admin == 1:
                 response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Welcome Admin, SECRETKEY:ADMIN123"})
                 return response
@@ -574,7 +578,7 @@ def a9_lab(request):
             try :
                 file=request.FILES["file"]
                 try :
-                    data = yaml.load(file,yaml.Loader)
+                    data = yaml.safe_load(file)
                     
                     return render(request,"Lab/A9/a9_lab.html",{"data":data})
                 except:
