@@ -87,6 +87,21 @@ class PlatformRegressionTests(TestCase):
         )
         self.assertEqual(self.client.get("/").status_code, 200)
 
+    def test_cmd_lab_rejects_malicious_domain(self):
+        """Command injection payloads must be rejected by domain allowlist."""
+        self.client.force_login(self.user)
+        for payload in ("example.com; cat /etc/passwd", "$(whoami)", "`id`", "a | ls"):
+            r = self.client.post("/cmd_lab", {"domain": payload, "os": "linux"})
+            self.assertEqual(r.status_code, 200)
+            self.assertIn("Invalid domain name", r.content.decode())
+
+    def test_cmd_lab_accepts_valid_domain(self):
+        """Valid domain names pass the allowlist check."""
+        self.client.force_login(self.user)
+        r = self.client.post("/cmd_lab", {"domain": "example.com", "os": "linux"})
+        self.assertEqual(r.status_code, 200)
+        self.assertNotIn("Invalid domain name", r.content.decode())
+
     def test_login_post(self):
         r = self.client.post(
             reverse("login"),
