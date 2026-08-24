@@ -8,6 +8,7 @@ import pickle
 import random
 import re
 import string
+import shlex
 import subprocess
 import uuid
 from dataclasses import dataclass
@@ -413,30 +414,35 @@ def cmd(request):
         return redirect('login')
 @csrf_exempt
 def cmd_lab(request):
+    # Allowlist of permitted command binaries keyed by OS selection
+    ALLOWED_COMMANDS = {
+        'win': 'nslookup',
+        'linux': 'dig',
+    }
+
     if request.user.is_authenticated:
         if(request.method=="POST"):
             domain=request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            os=request.POST.get('os')
-            print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
-            else:
-                command = "dig {}".format(domain)
-            
+            os_choice=request.POST.get('os')
+            print(os_choice)
+
+            # Use allowlist to select the command binary; reject unknown values
+            cmd_binary = ALLOWED_COMMANDS.get(os_choice)
+            if cmd_binary is None:
+                output = "Invalid OS selection"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
                 process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
+                    [cmd_binary, domain],
+                    shell=False,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
                 data = stdout.decode('utf-8')
                 stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
                 output = data + stderr
                 print(data + stderr)
             except:
