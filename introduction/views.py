@@ -442,31 +442,18 @@ def cmd_lab(request):
                 output = "Invalid domain. Only alphanumeric characters, dots, hyphens, and underscores are allowed."
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
-            # Construct fresh argument list from validated values to break taint
-            safe_domain = str(domain)
-            if os == "win":
-                proc_args = ["nslookup", safe_domain]
-            elif os == "linux":
-                proc_args = ["/usr/bin/dig", safe_domain]
-            else:
-                return render(request, 'Lab/CMD/cmd_lab.html', {"output": "Invalid OS selection"})
-
+            # Perform DNS lookup using Python stdlib (no subprocess needed)
             try:
-                process = subprocess.Popen(
-                    proc_args,
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate(timeout=30)
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                output = data + stderr
-                print(data + stderr)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                output = "Command timed out"
-                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
-            except:
+                addr_infos = socket.getaddrinfo(domain, None)
+                results = set()
+                for info in addr_infos:
+                    results.add(info[4][0])
+                output = f"DNS lookup for {domain}:\n"
+                for addr in sorted(results):
+                    output += f"  {addr}\n"
+            except socket.gaierror as e:
+                output = f"DNS lookup failed for {domain}: {e}"
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
