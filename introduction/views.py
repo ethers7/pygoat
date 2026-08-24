@@ -7,21 +7,30 @@ import os
 import pickle
 import random
 import re
-import shlex
 import string
 import subprocess
 
 
-def _validate_dns_domain(raw_domain):
-    """Validate and return a safe domain string for DNS lookup commands.
+def _run_dns_lookup(raw_domain, os_type):
+    """Validate inputs and run a DNS lookup command safely.
 
-    Strips protocol prefixes, validates against a strict allowlist regex,
-    and returns a sanitized copy. Raises ValueError if invalid.
+    Raises ValueError if domain or os_type is invalid.
+    Returns (stdout, stderr) as decoded strings.
     """
     domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', raw_domain, flags=re.IGNORECASE)
     if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]{0,253}[a-zA-Z0-9])?$', domain):
         raise ValueError("Invalid domain name")
-    return shlex.quote(domain)
+    allowed_commands = {'win': 'nslookup', 'linux': 'dig'}
+    cmd_name = allowed_commands.get(os_type)
+    if cmd_name is None:
+        raise ValueError("Invalid OS selection")
+    process = subprocess.Popen(
+        [cmd_name, domain],
+        shell=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE)
+    stdout, stderr = process.communicate()
+    return stdout.decode('utf-8'), stderr.decode('utf-8')
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
@@ -428,31 +437,17 @@ def cmd(request):
 def cmd_lab(request):
     if request.user.is_authenticated:
         if(request.method=="POST"):
-            try:
-                safe_domain = _validate_dns_domain(request.POST.get('domain'))
-            except ValueError:
-                output = "Invalid domain name"
-                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             os_type=request.POST.get('os')
             print(os_type)
-            ALLOWED_COMMANDS = {'win': 'nslookup', 'linux': 'dig'}
-            cmd_name = ALLOWED_COMMANDS.get(os_type)
-            if cmd_name is None:
-                output = "Invalid OS selection"
-                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
             try:
-                process = subprocess.Popen(
-                    [cmd_name, safe_domain],
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                output = data + stderr
-                print(data + stderr)
-            except:
+                data, stderr_out = _run_dns_lookup(request.POST.get('domain'), os_type)
+                output = data + stderr_out
+                print(data + stderr_out)
+            except ValueError as e:
+                output = str(e)
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
