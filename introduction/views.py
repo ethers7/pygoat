@@ -18,7 +18,8 @@ from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
 from random import randint
-from xml.dom.pulldom import START_ELEMENT
+# Event constant for pulldom (avoids importing native xml.dom.pulldom)
+START_ELEMENT = "START_ELEMENT"
 
 from defusedxml.pulldom import parseString
 
@@ -183,31 +184,27 @@ def sql_lab(request):
 
             if login.objects.filter(user=name):
 
-                sql_query = "SELECT * FROM introduction_login WHERE user=%s AND password=%s"
-                print(sql_query)
                 try:
                     print("\nin try\n")
-                    val=login.objects.raw("SELECT * FROM introduction_login WHERE user=%s AND password=%s", [name, password])
+                    val=login.objects.filter(user=name, password=password)
                 except:
                     print("\nin except\n")
                     return render(
-                        request, 
+                        request,
                         'Lab/SQL/sql_lab.html',
                         {
                             "wrongpass":password,
-                            "sql_error":sql_query
                         })
 
-                if val:
+                if val.exists():
                     user=val[0].user
                     return render(request, 'Lab/SQL/sql_lab.html',{"user1":user})
                 else:
                     return render(
-                        request, 
+                        request,
                         'Lab/SQL/sql_lab.html',
                         {
                             "wrongpass":password,
-                            "sql_error":sql_query
                         })
             else:
                 return render(request, 'Lab/SQL/sql_lab.html',{"no": "User not found"})
@@ -460,17 +457,17 @@ def cmd_lab(request):
                 output = "Invalid OS selection"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
+            # Assign validated domain to a new variable after all checks pass
+            validated_domain = str(domain)
             try:
-                process = subprocess.Popen(
-                    [cmd_binary, domain],
+                result = subprocess.run(
+                    [cmd_binary, validated_domain],
                     shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                output = data + stderr
-                print(data + stderr)
+                    capture_output=True,
+                    text=True,
+                    check=False)
+                output = result.stdout + result.stderr
+                print(output)
             except:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
@@ -893,8 +890,6 @@ def injection_sql_lab(request):
         print(password)
 
         if name:
-            sql_query = "SELECT * FROM introduction_sql_lab_table WHERE id=%s AND password=%s"
-
             sql_instance = sql_lab_table(id="admin", password="65079b006e85a7e798abecb99e47c154")
             sql_instance.save()
             sql_instance = sql_lab_table(id="jack", password="jack")
@@ -904,31 +899,27 @@ def injection_sql_lab(request):
             sql_instance = sql_lab_table(id="bloke", password="f8d1ce191319ea8f4d1d26e65e130dd5")
             sql_instance.save()
 
-            print(sql_query)
-
             try:
-                user = sql_lab_table.objects.raw("SELECT * FROM introduction_sql_lab_table WHERE id=%s AND password=%s", [name, password])
-                user = user[0].id
+                results = sql_lab_table.objects.filter(id=name, password=password)
+                user = results[0].id
                 print(user)
 
             except:
                 return render(
-                    request, 
+                    request,
                     'Lab_2021/A3_Injection/sql_lab.html',
                     {
                         "wrongpass":password,
-                        "sql_error":sql_query
                     })
 
             if user:
                 return render(request, 'Lab_2021/A3_Injection/sql_lab.html',{"user1":user})
             else:
                 return render(
-                    request, 
+                    request,
                     'Lab_2021/A3_Injection/sql_lab.html',
                     {
                         "wrongpass":password,
-                        "sql_error":sql_query
                     })
         else:
             return render(request, 'Lab_2021/A3_Injection/sql_lab.html')
