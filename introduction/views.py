@@ -431,10 +431,12 @@ def cmd_lab(request):
                 output = "Invalid OS selection"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             cmd_binary = ALLOWED_COMMANDS[os]
+            # Sanitize domain for subprocess to prevent command injection
+            safe_domain = shlex.quote(domain)
 
             try:
                 process = subprocess.Popen(
-                    [cmd_binary, domain],
+                    [cmd_binary, safe_domain],
                     shell=False,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
