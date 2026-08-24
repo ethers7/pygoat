@@ -7,6 +7,7 @@ import os
 import pickle
 import random
 import re
+import shlex
 import string
 import subprocess
 import uuid
@@ -428,9 +429,13 @@ def cmd_lab(request):
             else:
                 cmd_name = ALLOWED_COMMANDS["dig"]
 
+            # Defense-in-depth: shlex.quote ensures no shell meta-characters
+            # even though shell=False already prevents shell interpretation.
+            safe_domain = shlex.quote(domain)
+
             try:
                 process = subprocess.Popen(
-                    [cmd_name, domain],
+                    [cmd_name, safe_domain],
                     shell=False,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
