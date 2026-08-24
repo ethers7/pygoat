@@ -116,7 +116,7 @@ class PlatformRegressionTests(TestCase):
         self.assertContains(r, "Invalid OS selection")
 
     def test_cmd_lab_valid_request(self):
-        """Valid domain and OS proceeds without error page."""
+        """Valid domain and OS proceeds with DNS lookup output."""
         self.client.force_login(self.user)
         r = self.client.post(
             "/cmd_lab",
@@ -126,3 +126,5 @@ class PlatformRegressionTests(TestCase):
         # Should not show validation errors
         self.assertNotContains(r, "Invalid domain name")
         self.assertNotContains(r, "Invalid OS selection")
+        # Should show DNS lookup header (uses socket.getaddrinfo, not subprocess)
+        self.assertContains(r, "DNS lookup for: example.com")

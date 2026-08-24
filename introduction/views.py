@@ -9,7 +9,6 @@ import random
 import re
 import socket
 import string
-import subprocess
 import urllib.parse
 import uuid
 from dataclasses import dataclass
@@ -411,11 +410,8 @@ def cmd(request):
         return redirect('login')
 @csrf_exempt
 def cmd_lab(request):
-    # Allowlist of permitted DNS lookup commands
-    ALLOWED_COMMANDS = {
-        'win': 'nslookup',
-        'linux': 'dig',
-    }
+    # Supported OS values (kept for UI consistency)
+    SUPPORTED_OS = {'win', 'linux'}
 
     if request.user.is_authenticated:
         if(request.method=="POST"):
@@ -430,23 +426,32 @@ def cmd_lab(request):
             safe_domain = match.group()
             os_choice=request.POST.get('os')
             print(os_choice)
-            # Use allowlist to select command; reject unknown values
-            cmd_name = ALLOWED_COMMANDS.get(os_choice)
-            if cmd_name is None:
+            # Validate OS selection against allowlist
+            if os_choice not in SUPPORTED_OS:
                 output = "Invalid OS selection"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
             try:
-                result = subprocess.run(
-                    [cmd_name, safe_domain],
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                data = result.stdout.decode('utf-8')
-                stderr = result.stderr.decode('utf-8')
-                output = data + stderr
-                print(data + stderr)
-            except:
+                # Use Python's built-in socket for DNS resolution instead of subprocess
+                results = socket.getaddrinfo(safe_domain, None)
+                # Format results similar to dig/nslookup output
+                seen = set()
+                lines = [f"DNS lookup for: {safe_domain}", ""]
+                for family, socktype, proto, canonname, sockaddr in results:
+                    addr = sockaddr[0]
+                    if addr in seen:
+                        continue
+                    seen.add(addr)
+                    family_name = "IPv6" if family == socket.AF_INET6 else "IPv4"
+                    lines.append(f"  {family_name}: {addr}")
+                if not seen:
+                    lines.append("  No results found")
+                output = "\n".join(lines)
+                print(output)
+            except socket.gaierror as e:
+                output = f"DNS resolution failed: {e}"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
