@@ -7,6 +7,7 @@ import os
 import pickle
 import random
 import re
+import shlex
 import string
 import subprocess
 import uuid
@@ -434,10 +435,12 @@ def cmd_lab(request):
             print(os_choice)
 
             # Use allowlist to select command
+            # Sanitize domain with shlex.quote as defense-in-depth
+            safe_domain = shlex.quote(domain)
             if os_choice == 'win':
-                cmd_parts = ALLOWED_COMMANDS['win'] + [domain]
+                cmd_parts = ALLOWED_COMMANDS['win'] + [safe_domain]
             else:
-                cmd_parts = ALLOWED_COMMANDS['linux'] + [domain]
+                cmd_parts = ALLOWED_COMMANDS['linux'] + [safe_domain]
 
             try:
                 process = subprocess.Popen(
