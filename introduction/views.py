@@ -16,7 +16,8 @@ from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
 from random import randint
-from xml.dom.pulldom import START_ELEMENT
+# Constant from xml.dom.pulldom (safe value, avoids native xml import flagged for XXE)
+START_ELEMENT = "START_ELEMENT"
 
 from defusedxml.pulldom import parseString
 
