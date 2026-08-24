@@ -71,6 +71,9 @@ def deserialize_data():
         return render_template('result.html', message=f"Error: {str(e)}")
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
+    host = os.environ.get('FLASK_HOST', '0.0.0.0')
+    port = int(os.environ.get('FLASK_PORT', '8080'))
+    debug = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
+    app.run(host=host, port=port, debug=debug)
 
     
