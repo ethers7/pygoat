@@ -7,7 +7,6 @@ import logging
 import os
 import random
 import re
-import shlex
 import socket
 import string
 import subprocess
@@ -422,8 +421,8 @@ def cmd_lab(request):
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             os=request.POST.get('os')
             print(os)
-            # Sanitize domain for subprocess use (defense-in-depth)
-            safe_domain = shlex.quote(domain)
+            # Sanitize domain for subprocess use (defense-in-depth after regex validation)
+            safe_domain = "".join(c for c in domain if c.isalnum() or c in '.-')
             if(os=='win'):
                 cmd_args = ["nslookup", safe_domain]
             else:
