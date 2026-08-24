@@ -10,6 +10,18 @@ import re
 import shlex
 import string
 import subprocess
+
+
+def _validate_dns_domain(raw_domain):
+    """Validate and return a safe domain string for DNS lookup commands.
+
+    Strips protocol prefixes, validates against a strict allowlist regex,
+    and returns a sanitized copy. Raises ValueError if invalid.
+    """
+    domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', raw_domain, flags=re.IGNORECASE)
+    if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]{0,253}[a-zA-Z0-9])?$', domain):
+        raise ValueError("Invalid domain name")
+    return shlex.quote(domain)
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
@@ -416,17 +428,13 @@ def cmd(request):
 def cmd_lab(request):
     if request.user.is_authenticated:
         if(request.method=="POST"):
-            domain=request.POST.get('domain')
-            # Remove all common protocols (case-insensitive) and www prefix
-            domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            # Validate domain: only allow valid domain name characters
-            # (alphanumeric, hyphens, dots) to prevent command injection
-            if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]{0,253}[a-zA-Z0-9])?$', domain):
+            try:
+                safe_domain = _validate_dns_domain(request.POST.get('domain'))
+            except ValueError:
                 output = "Invalid domain name"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             os_type=request.POST.get('os')
             print(os_type)
-            # Allowlist of permitted commands for DNS lookup
             ALLOWED_COMMANDS = {'win': 'nslookup', 'linux': 'dig'}
             cmd_name = ALLOWED_COMMANDS.get(os_type)
             if cmd_name is None:
@@ -434,9 +442,8 @@ def cmd_lab(request):
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
             try:
-                sanitized_domain = shlex.quote(domain)
                 process = subprocess.Popen(
-                    [cmd_name, sanitized_domain],
+                    [cmd_name, safe_domain],
                     shell=False,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
