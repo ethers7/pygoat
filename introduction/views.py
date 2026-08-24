@@ -1,6 +1,7 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
@@ -8,9 +9,11 @@ import pickle
 import random
 import re
 import shlex
+import socket
 import string
 import subprocess
 import uuid
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
@@ -976,10 +979,21 @@ def ssrf_lab2(request):
     elif request.method == "POST":
         url = request.POST["url"]
         try:
-            response = requests.get(url)
+            parsed = urlparse(url)
+            if parsed.scheme not in ("http", "https"):
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Only http and https schemes are allowed"})
+            hostname = parsed.hostname
+            if not hostname:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+            resolved_ip = ipaddress.ip_address(socket.gethostbyname(hostname))
+            if resolved_ip.is_private or resolved_ip.is_loopback or resolved_ip.is_reserved or resolved_ip.is_link_local:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Requests to internal addresses are not allowed"})
+            response = requests.get(url, timeout=10)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+        except (socket.gaierror, ValueError):
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+        except requests.RequestException:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Request failed"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
 def ssti(request):
