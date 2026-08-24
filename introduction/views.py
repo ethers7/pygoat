@@ -153,19 +153,17 @@ def sql_lab(request):
 
             if login.objects.filter(user=name):
 
-                sql_query = "SELECT * FROM introduction_login WHERE user=%s AND password=%s"
-                print(sql_query)
                 try:
                     print("\nin try\n")
-                    val=login.objects.raw(sql_query, [name, password])
+                    val = login.objects.filter(user=name, password=password)
                 except:
                     print("\nin except\n")
                     return render(
-                        request, 
+                        request,
                         'Lab/SQL/sql_lab.html',
                         {
                             "wrongpass":password,
-                            "sql_error":sql_query
+                            "sql_error":""
                         })
 
                 if val:
@@ -173,11 +171,11 @@ def sql_lab(request):
                     return render(request, 'Lab/SQL/sql_lab.html',{"user1":user})
                 else:
                     return render(
-                        request, 
+                        request,
                         'Lab/SQL/sql_lab.html',
                         {
                             "wrongpass":password,
-                            "sql_error":sql_query
+                            "sql_error":""
                         })
             else:
                 return render(request, 'Lab/SQL/sql_lab.html',{"no": "User not found"})
@@ -854,8 +852,6 @@ def injection_sql_lab(request):
         print(password)
 
         if name:
-            sql_query = "SELECT * FROM introduction_sql_lab_table WHERE id=%s AND password=%s"
-
             sql_instance = sql_lab_table(id="admin", password="65079b006e85a7e798abecb99e47c154")
             sql_instance.save()
             sql_instance = sql_lab_table(id="jack", password="jack")
@@ -865,31 +861,29 @@ def injection_sql_lab(request):
             sql_instance = sql_lab_table(id="bloke", password="f8d1ce191319ea8f4d1d26e65e130dd5")
             sql_instance.save()
 
-            print(sql_query)
-
             try:
-                user = sql_lab_table.objects.raw(sql_query, [name, password])
+                user = sql_lab_table.objects.filter(id=name, password=password)
                 user = user[0].id
                 print(user)
 
             except:
                 return render(
-                    request, 
+                    request,
                     'Lab_2021/A3_Injection/sql_lab.html',
                     {
                         "wrongpass":password,
-                        "sql_error":sql_query
+                        "sql_error":""
                     })
 
             if user:
                 return render(request, 'Lab_2021/A3_Injection/sql_lab.html',{"user1":user})
             else:
                 return render(
-                    request, 
+                    request,
                     'Lab_2021/A3_Injection/sql_lab.html',
                     {
                         "wrongpass":password,
-                        "sql_error":sql_query
+                        "sql_error":""
                     })
         else:
             return render(request, 'Lab_2021/A3_Injection/sql_lab.html')
