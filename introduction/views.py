@@ -964,9 +964,36 @@ def ssrf_lab2(request):
     elif request.method == "POST":
         url = request.POST["url"]
         try:
-            response = requests.get(url)
+            from urllib.parse import urlparse
+            import ipaddress
+            import socket
+
+            parsed = urlparse(url)
+
+            # Validate scheme
+            if parsed.scheme not in ("http", "https"):
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL scheme"})
+
+            hostname = parsed.hostname
+            if not hostname:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+
+            # Reject localhost by name
+            if hostname in ("localhost", "0.0.0.0"):
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Requests to internal addresses are not allowed"})
+
+            # Resolve hostname and check all resulting IPs are not private/reserved
+            resolved_ips = socket.getaddrinfo(hostname, None)
+            for result in resolved_ips:
+                ip = ipaddress.ip_address(result[4][0])
+                if ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local:
+                    return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Requests to internal addresses are not allowed"})
+
+            response = requests.get(url, allow_redirects=False, timeout=10)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+        except (socket.gaierror, ValueError):
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
