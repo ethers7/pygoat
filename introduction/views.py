@@ -7,6 +7,7 @@ import os
 import pickle
 import random
 import re
+import shlex
 import string
 import subprocess
 import uuid
@@ -418,23 +419,32 @@ def cmd_lab(request):
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
             os=request.POST.get('os')
             print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
-            else:
-                command = "dig {}".format(domain)
-            
+
+            # Validate domain: only allow valid domain name characters
+            # (alphanumeric, hyphens, dots, and trailing dot for FQDN)
+            if not domain or not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?\.?$', domain):
+                output = "Invalid domain name"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+
+            # Allowlist of permitted commands
+            ALLOWED_COMMANDS = {
+                'win': 'nslookup',
+                'linux': 'dig',
+            }
+            cmd_name = ALLOWED_COMMANDS.get(os, 'dig')
+
+            # Build command as a list to avoid shell injection
+            command = [cmd_name, domain]
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
                 process = subprocess.Popen(
                     command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
+                    shell=False,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
                 data = stdout.decode('utf-8')
                 stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
                 output = data + stderr
                 print(data + stderr)
             except:
