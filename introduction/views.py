@@ -1,15 +1,19 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import pickle
 import random
 import re
+import shlex
+import socket
 import string
 import subprocess
 import uuid
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
@@ -418,19 +422,23 @@ def cmd_lab(request):
             domain=request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
+            # Validate domain: only allow valid domain name characters (allowlist)
+            if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?$', domain):
+                output = "Invalid domain name"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             os=request.POST.get('os')
             print(os)
             if(os=='win'):
-                command="nslookup {}".format(domain)
+                command=["nslookup", shlex.quote(domain)]
             else:
-                command = "dig {}".format(domain)
-            
+                command = ["dig", shlex.quote(domain)]
+
             try:
                 # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
                 process = subprocess.Popen(
                     command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
+                    shell=False,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
                 data = stdout.decode('utf-8')
@@ -952,6 +960,33 @@ def ssrf_target(request):
     else:
         return render(request,"Lab/ssrf/ssrf_target.html",{"access_denied":True})
 
+def _validate_ssrf_url(url):
+    """Validate a URL to prevent SSRF attacks.
+
+    Returns (True, None) if the URL is safe, or (False, error_message) if not.
+    """
+    parsed = urlparse(url)
+
+    if parsed.scheme not in ("http", "https"):
+        return False, "Only http and https schemes are allowed"
+
+    hostname = parsed.hostname
+    if not hostname:
+        return False, "Invalid URL: no hostname"
+
+    try:
+        addr_infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        return False, "Unable to resolve hostname"
+
+    for addr_info in addr_infos:
+        ip = ipaddress.ip_address(addr_info[4][0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            return False, "Requests to private/internal addresses are not allowed"
+
+    return True, None
+
+
 @authentication_decorator
 def ssrf_lab2(request):
     if request.method == "GET":
@@ -959,10 +994,13 @@ def ssrf_lab2(request):
 
     elif request.method == "POST":
         url = request.POST["url"]
+        is_safe, error_msg = _validate_ssrf_url(url)
+        if not is_safe:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": error_msg})
         try:
-            response = requests.get(url)
+            response = requests.get(url, allow_redirects=False, timeout=5)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
