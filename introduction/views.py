@@ -429,9 +429,9 @@ def cmd_lab(request):
             os=request.POST.get('os')
             print(os)
             if(os=='win'):
-                cmd_args = ["nslookup", domain]
+                cmd_args = ["nslookup", shlex.quote(domain)]
             else:
-                cmd_args = ["dig", domain]
+                cmd_args = ["dig", shlex.quote(domain)]
 
             try:
                 process = subprocess.Popen(
