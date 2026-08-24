@@ -1,6 +1,7 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
@@ -8,8 +9,10 @@ import pickle
 import random
 import re
 import shlex
+import socket
 import string
 import subprocess
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
@@ -41,6 +44,30 @@ from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
 from .utility import customHash, filter_blog
 
 #*****************************************Lab Requirements****************************************************#
+
+
+def _is_safe_url(url):
+    """Validate that a URL is safe to request (not targeting internal/private resources)."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False
+    hostname = parsed.hostname
+    if not hostname:
+        return False
+    try:
+        resolved_ips = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        return False
+    for result in resolved_ips:
+        ip_str = result[4][0]
+        try:
+            addr = ipaddress.ip_address(ip_str)
+        except ValueError:
+            return False
+        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+            return False
+    return True
+
 
 #*****************************************Login and Registration****************************************************#
 
@@ -966,6 +993,8 @@ def ssrf_lab2(request):
 
     elif request.method == "POST":
         url = request.POST["url"]
+        if not _is_safe_url(url):
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
         try:
             response = requests.get(url)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
