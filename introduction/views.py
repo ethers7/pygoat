@@ -434,23 +434,21 @@ def cmd_lab(request):
                 output = "Invalid domain name"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
-            os_type=request.POST.get('os')
-            print(os_type)
-            cmd_key = 'win' if os_type == 'win' else 'linux'
-            cmd_args = [ALLOWED_COMMANDS[cmd_key], shlex.quote(domain)]
-
             try:
-                process = subprocess.Popen(
-                    cmd_args,
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                output = data + stderr
-                print(data + stderr)
-            except:
+                results = socket.getaddrinfo(domain, None)
+                # Format output similar to nslookup/dig
+                lines = [f"DNS lookup for: {domain}", ""]
+                seen = set()
+                for family, socktype, proto, canonname, sockaddr in results:
+                    addr = sockaddr[0]
+                    if addr not in seen:
+                        seen.add(addr)
+                        family_name = "IPv6" if family == socket.AF_INET6 else "IPv4"
+                        lines.append(f"Address: {addr} ({family_name})")
+                output = "\n".join(lines)
+            except socket.gaierror as e:
+                output = f"DNS lookup failed: {e}"
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
