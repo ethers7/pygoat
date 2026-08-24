@@ -161,32 +161,27 @@ def sql_lab(request):
 
             if login.objects.filter(user=name):
 
-                sql_query = "SELECT * FROM introduction_login WHERE user=%s AND password=%s"
-                sql_params = [name, password]
-                print(sql_query)
                 try:
-                    print("\nin try\n")
-                    val=login.objects.raw(sql_query, sql_params)
-                except:
-                    print("\nin except\n")
+                    val = login.objects.filter(user=name, password=password)
+                except Exception:
                     return render(
-                        request, 
+                        request,
                         'Lab/SQL/sql_lab.html',
                         {
                             "wrongpass":password,
-                            "sql_error":sql_query
+                            "sql_error":"Query failed"
                         })
 
-                if val:
+                if val.exists():
                     user=val[0].user
                     return render(request, 'Lab/SQL/sql_lab.html',{"user1":user})
                 else:
                     return render(
-                        request, 
+                        request,
                         'Lab/SQL/sql_lab.html',
                         {
                             "wrongpass":password,
-                            "sql_error":sql_query
+                            "sql_error":"No matching user"
                         })
             else:
                 return render(request, 'Lab/SQL/sql_lab.html',{"no": "User not found"})
@@ -433,20 +428,15 @@ def cmd_lab(request):
             cmd_name = ALLOWED_COMMANDS.get(os, 'dig')
 
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
-                process = subprocess.Popen(
-                    [cmd_name, domain],
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
-                output = data + stderr
-                print(data + stderr)
-            except:
+                # Use Python's socket for DNS resolution instead of subprocess
+                addr_info = socket.getaddrinfo(domain, None)
+                resolved = set()
+                for family, kind, proto, canonname, sockaddr in addr_info:
+                    resolved.add(sockaddr[0])
+                output = "DNS resolution for {}:\n{}".format(domain, "\n".join(sorted(resolved)))
+            except socket.gaierror as e:
+                output = "DNS lookup failed for {}: {}".format(domain, str(e))
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
@@ -564,7 +554,7 @@ def a9_lab(request):
             try :
                 file=request.FILES["file"]
                 try :
-                    data = yaml.load(file, yaml.SafeLoader)
+                    data = yaml.safe_load(file)
                     
                     return render(request,"Lab/A9/a9_lab.html",{"data":data})
                 except:
@@ -868,43 +858,33 @@ def injection_sql_lab(request):
         print(password)
 
         if name:
-            sql_query = "SELECT * FROM introduction_sql_lab_table WHERE id=%s AND password=%s"
-            sql_params = [name, password]
-
-            sql_instance = sql_lab_table(id="admin", password="65079b006e85a7e798abecb99e47c154")
-            sql_instance.save()
-            sql_instance = sql_lab_table(id="jack", password="jack")
-            sql_instance.save()
-            sql_instance = sql_lab_table(id="slinky", password="b4f945433ea4c369c12741f62a23ccc0")
-            sql_instance.save()
-            sql_instance = sql_lab_table(id="bloke", password="f8d1ce191319ea8f4d1d26e65e130dd5")
-            sql_instance.save()
-
-            print(sql_query)
+            sql_lab_table.objects.get_or_create(id="admin", defaults={"password": "65079b006e85a7e798abecb99e47c154"})
+            sql_lab_table.objects.get_or_create(id="jack", defaults={"password": "jack"})
+            sql_lab_table.objects.get_or_create(id="slinky", defaults={"password": "b4f945433ea4c369c12741f62a23ccc0"})
+            sql_lab_table.objects.get_or_create(id="bloke", defaults={"password": "f8d1ce191319ea8f4d1d26e65e130dd5"})
 
             try:
-                user = sql_lab_table.objects.raw(sql_query, sql_params)
-                user = user[0].id
-                print(user)
+                results = sql_lab_table.objects.filter(id=name, password=password)
+                user = results[0].id if results.exists() else None
 
-            except:
+            except Exception:
                 return render(
-                    request, 
+                    request,
                     'Lab_2021/A3_Injection/sql_lab.html',
                     {
                         "wrongpass":password,
-                        "sql_error":sql_query
+                        "sql_error":"Query failed"
                     })
 
             if user:
                 return render(request, 'Lab_2021/A3_Injection/sql_lab.html',{"user1":user})
             else:
                 return render(
-                    request, 
+                    request,
                     'Lab_2021/A3_Injection/sql_lab.html',
                     {
                         "wrongpass":password,
-                        "sql_error":sql_query
+                        "sql_error":"No matching user"
                     })
         else:
             return render(request, 'Lab_2021/A3_Injection/sql_lab.html')
