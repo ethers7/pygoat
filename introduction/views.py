@@ -1,14 +1,17 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import random
 import re
 import shlex
+import socket
 import string
 import subprocess
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
@@ -971,10 +974,34 @@ def ssrf_lab2(request):
 
     elif request.method == "POST":
         url = request.POST["url"]
+        # Validate URL scheme and host to prevent SSRF
         try:
-            response = requests.get(url)
+            parsed = urllib.parse.urlparse(url)
+        except Exception:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+
+        if parsed.scheme not in ("http", "https"):
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL scheme"})
+
+        hostname = parsed.hostname
+        if not hostname:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+
+        # Resolve hostname and check against private/reserved IP ranges
+        try:
+            resolved_ips = socket.getaddrinfo(hostname, None)
+        except socket.gaierror:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+
+        for addr_info in resolved_ips:
+            ip = ipaddress.ip_address(addr_info[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Requests to internal addresses are not allowed"})
+
+        try:
+            response = requests.get(url, allow_redirects=False, timeout=10)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
