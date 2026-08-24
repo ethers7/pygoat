@@ -38,54 +38,42 @@ class CmdLabSecurityTest(TestCase):
         response = self._post('')
         self.assertContains(response, 'Invalid domain name')
 
-    @patch('introduction.views.subprocess.Popen')
-    def test_valid_domain_uses_allowlisted_dig(self, mock_popen):
-        mock_proc = MagicMock()
-        mock_proc.communicate.return_value = (b'result\n', b'')
-        mock_popen.return_value = mock_proc
+    @patch('introduction.views.socket.getaddrinfo')
+    def test_valid_domain_resolves_dns(self, mock_getaddrinfo):
+        mock_getaddrinfo.return_value = [
+            (2, 1, 6, '', ('93.184.216.34', 0)),
+        ]
 
         response = self._post('example.com', 'linux')
-        mock_popen.assert_called_once_with(
-            ['dig', 'example.com'],
-            shell=False,
-            stdout=-1,
-            stderr=-1,
+        mock_getaddrinfo.assert_called_once_with(
+            'example.com', None, 0, 1,
         )
-        self.assertContains(response, 'result')
+        self.assertContains(response, 'DNS lookup for example.com')
+        self.assertContains(response, '93.184.216.34')
 
-    @patch('introduction.views.subprocess.Popen')
-    def test_valid_domain_uses_allowlisted_nslookup(self, mock_popen):
-        mock_proc = MagicMock()
-        mock_proc.communicate.return_value = (b'lookup result\n', b'')
-        mock_popen.return_value = mock_proc
+    @patch('introduction.views.socket.getaddrinfo')
+    def test_valid_domain_multiple_addresses(self, mock_getaddrinfo):
+        mock_getaddrinfo.return_value = [
+            (2, 1, 6, '', ('93.184.216.34', 0)),
+            (10, 1, 6, '', ('2606:2800:220:1:248:1893:25c8:1946', 0, 0, 0)),
+        ]
 
         response = self._post('example.com', 'win')
-        mock_popen.assert_called_once_with(
-            ['nslookup', 'example.com'],
-            shell=False,
-            stdout=-1,
-            stderr=-1,
-        )
-        self.assertContains(response, 'lookup result')
+        self.assertContains(response, '93.184.216.34')
+        self.assertContains(response, '2606:2800:220:1:248:1893:25c8:1946')
 
-    @patch('introduction.views.subprocess.Popen')
-    def test_unknown_os_defaults_to_dig(self, mock_popen):
-        mock_proc = MagicMock()
-        mock_proc.communicate.return_value = (b'dig output\n', b'')
-        mock_popen.return_value = mock_proc
+    @patch('introduction.views.socket.getaddrinfo')
+    def test_dns_lookup_failure(self, mock_getaddrinfo):
+        import socket
+        mock_getaddrinfo.side_effect = socket.gaierror('Name or service not known')
 
-        response = self._post('example.com', 'unknown')
-        mock_popen.assert_called_once_with(
-            ['dig', 'example.com'],
-            shell=False,
-            stdout=-1,
-            stderr=-1,
-        )
+        response = self._post('nonexistent.invalid', 'linux')
+        self.assertContains(response, 'DNS lookup failed')
 
     def test_strips_protocol_and_validates(self):
-        response = self._post('https://www.example.com')
         # After stripping protocol/www, domain is "example.com" which is valid
         # so no "Invalid domain name" should appear
+        response = self._post('https://www.example.com')
         self.assertNotContains(response, 'Invalid domain name')
 
 

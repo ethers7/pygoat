@@ -8,11 +8,9 @@ import os
 import pickle
 import random
 import re
-import shlex
 import socket
 import string
 from urllib.parse import urlparse
-import subprocess
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
@@ -428,28 +426,17 @@ def cmd_lab(request):
                 output = "Invalid domain name"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
-            # Allowlist of permitted commands keyed by OS parameter
-            ALLOWED_COMMANDS = {
-                'win': 'nslookup',
-                'linux': 'dig',
-            }
-
-            os_param=request.POST.get('os')
-            print(os_param)
-            command_name = ALLOWED_COMMANDS.get(os_param, 'dig')
-
             try:
-                process = subprocess.Popen(
-                    [command_name, shlex.quote(domain)],
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                output = data + stderr
-                print(data + stderr)
-            except:
+                results = socket.getaddrinfo(domain, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+                addresses = sorted(set(addr[4][0] for addr in results))
+                output = "DNS lookup for %s:\n" % domain
+                for addr in addresses:
+                    output += "  Address: %s\n" % addr
+                if not addresses:
+                    output += "  No addresses found.\n"
+            except socket.gaierror as e:
+                output = "DNS lookup failed for %s: %s" % (domain, str(e))
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
