@@ -434,7 +434,8 @@ def cmd_lab(request):
             cmd_name = ALLOWED_COMMANDS.get(os, 'dig')
 
             # Build command as a list to avoid shell injection
-            command = [cmd_name, domain]
+            # shlex.quote() as defense-in-depth sanitizer for subprocess args
+            command = [cmd_name, shlex.quote(domain)]
 
             try:
                 process = subprocess.Popen(
