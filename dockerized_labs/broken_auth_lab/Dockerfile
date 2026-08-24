@@ -17,5 +17,10 @@ ENV PYTHONUNBUFFERED=1
 # Expose port 5000
 EXPOSE 5000
 
+RUN adduser --disabled-password --gecos "" appuser \
+    && chown -R appuser:appuser /app
+
+USER appuser
+
 # Run the application
 CMD ["python", "app.py"] 

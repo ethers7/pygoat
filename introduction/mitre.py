@@ -1,5 +1,6 @@
 import datetime
 import re
+import shlex
 import subprocess
 from hashlib import md5
 
@@ -11,7 +12,9 @@ from django.views.decorators.csrf import csrf_exempt
 from .models import CSRF_user_tbl
 from .views import authentication_decorator
 
-# import os
+import os
+
+JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'change-me-set-JWT_SECRET_KEY-env')
 
 ## Mitre top1 | CWE:787
 
@@ -166,7 +169,7 @@ def csrf_lab_login(request):
                 'exp': datetime.datetime.utcnow() + datetime.timedelta(seconds=300),
                 'iat': datetime.datetime.utcnow()
             }
-            cookie = jwt.encode(payload, 'csrf_vulneribility', algorithm='HS256')
+            cookie = jwt.encode(payload, JWT_SECRET_KEY, algorithm='HS256')
             response = redirect("/mitre/9/lab/transaction")
             response.set_cookie('auth_cookiee', cookie)
             return response
@@ -179,7 +182,7 @@ def csrf_transfer_monei(request):
     if request.method == 'GET':
         try:
             cookie = request.COOKIES['auth_cookiee']
-            payload = jwt.decode(cookie, 'csrf_vulneribility', algorithms=['HS256'])
+            payload = jwt.decode(cookie, JWT_SECRET_KEY, algorithms=['HS256'])
             username = payload['username']
             User = CSRF_user_tbl.objects.filter(username=username)
             if not User:
@@ -191,7 +194,7 @@ def csrf_transfer_monei(request):
 def csrf_transfer_monei_api(request,recipent,amount):
     if request.method == "GET":
         cookie = request.COOKIES['auth_cookiee']
-        payload = jwt.decode(cookie, 'csrf_vulneribility', algorithms=['HS256'])
+        payload = jwt.decode(cookie, JWT_SECRET_KEY, algorithms=['HS256'])
         username = payload['username']
         User = CSRF_user_tbl.objects.filter(username=username)
         if not User:
@@ -230,7 +233,7 @@ def mitre_lab_17(request):
     return render(request, 'mitre/mitre_lab_17.html')
 
 def command_out(command):
-    process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    process = subprocess.Popen(shlex.split(command), shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return process.communicate()
     
 

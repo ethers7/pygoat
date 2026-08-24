@@ -77,8 +77,14 @@ class DoItFast(View):
 
         user_chal.is_live = False
         user_chal.save()
-        command = f"docker stop {user_chal.container_id}"
-        process = subprocess.Popen(command.split(" "), stdout=subprocess.PIPE)
+        # Validate container_id is a valid Docker container identifier (hex string or name)
+        import re
+        container_id = user_chal.container_id
+        if not container_id or not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$', container_id):
+            return JsonResponse({'message': 'invalid container id', 'status': '400'})
+        process = subprocess.Popen(
+            ["docker", "stop", container_id],
+            stdout=subprocess.PIPE)
         output, error = process.communicate()
         return JsonResponse({'message': 'success', 'status': '200'})
     
