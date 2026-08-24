@@ -7,6 +7,7 @@ import os
 import pickle
 import random
 import re
+import shlex
 import string
 import subprocess
 import uuid
@@ -412,10 +413,13 @@ def cmd_lab(request):
 
             os_type=request.POST.get('os', '')
 
+            # Sanitize domain for safe subprocess use
+            safe_domain = shlex.quote(domain)
+
             # Allowlist for OS selection and corresponding commands
             allowed_commands = {
-                'win': ['nslookup', domain],
-                'linux': ['dig', domain],
+                'win': ['nslookup', safe_domain],
+                'linux': ['dig', safe_domain],
             }
 
             if os_type not in allowed_commands:
