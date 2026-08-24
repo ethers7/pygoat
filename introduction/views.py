@@ -1,13 +1,16 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import random
 import re
+import socket
 import string
 import subprocess
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
@@ -981,9 +984,55 @@ def ssrf_lab2(request):
     elif request.method == "POST":
         url = request.POST["url"]
         try:
-            response = requests.get(url)
+            # Parse and validate URL components
+            parsed = urllib.parse.urlparse(url)
+
+            # Validate scheme (only allow http and https)
+            if parsed.scheme not in ("http", "https"):
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Only http and https schemes are allowed"})
+
+            hostname = parsed.hostname
+            if not hostname:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL: no hostname"})
+
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+            # Domain allowlist
+            allowed_domains = ["example.com", "api.example.com"]
+            if hostname not in allowed_domains:
+                # Resolve hostname to IP and verify it is not private/internal
+                try:
+                    resolved_ip = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)[0][4][0]
+                except socket.gaierror:
+                    return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Could not resolve hostname"})
+
+                ip_obj = ipaddress.ip_address(resolved_ip)
+                if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_reserved or ip_obj.is_multicast:
+                    return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Requests to internal/private addresses are not allowed"})
+            else:
+                # For allowlisted domains, still resolve to make request by IP
+                try:
+                    resolved_ip = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)[0][4][0]
+                except socket.gaierror:
+                    return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Could not resolve hostname"})
+
+            # Reconstruct the URL using the resolved IP to prevent TOCTOU / DNS rebinding
+            safe_url = urllib.parse.urlunparse((
+                parsed.scheme,
+                f"{resolved_ip}:{port}",
+                parsed.path or "/",
+                parsed.params,
+                parsed.query,
+                "",
+            ))
+
+            # Make the request to the resolved IP with the original Host header
+            headers = {"Host": hostname}
+            response = requests.get(safe_url, headers=headers, allow_redirects=False, timeout=5)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+        except requests.exceptions.RequestException:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Request failed"})
+        except (ValueError, KeyError):
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
