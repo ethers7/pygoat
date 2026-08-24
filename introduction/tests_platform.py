@@ -94,3 +94,29 @@ class PlatformRegressionTests(TestCase):
         )
         self.assertEqual(r.status_code, 302)
         self.assertEqual(self.client.get("/").status_code, 200)
+
+    def test_cmd_lab_rejects_invalid_os(self):
+        self.client.force_login(self.user)
+        r = self.client.post("/cmd_lab", {"domain": "example.com", "os": "invalid"})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Invalid OS selection")
+
+    def test_cmd_lab_rejects_malicious_domain(self):
+        self.client.force_login(self.user)
+        r = self.client.post("/cmd_lab", {"domain": "example.com; cat /etc/passwd", "os": "linux"})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Invalid domain")
+
+    def test_cmd_lab_rejects_command_injection_in_domain(self):
+        self.client.force_login(self.user)
+        r = self.client.post("/cmd_lab", {"domain": "$(whoami)", "os": "linux"})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Invalid domain")
+
+    def test_cmd_lab_accepts_valid_domain(self):
+        self.client.force_login(self.user)
+        r = self.client.post("/cmd_lab", {"domain": "example.com", "os": "linux"})
+        self.assertEqual(r.status_code, 200)
+        # Should not show validation errors
+        self.assertNotContains(r, "Invalid OS selection")
+        self.assertNotContains(r, "Invalid domain")

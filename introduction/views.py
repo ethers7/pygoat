@@ -414,30 +414,40 @@ def cmd(request):
         return redirect('login')
 @csrf_exempt
 def cmd_lab(request):
+    # Allowlist of permitted DNS lookup commands keyed by OS selection
+    ALLOWED_COMMANDS = {
+        "win": "nslookup",
+        "linux": "dig",
+    }
+
     if request.user.is_authenticated:
         if(request.method=="POST"):
-            domain=request.POST.get('domain')
+            domain=request.POST.get('domain', '')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            os=request.POST.get('os')
-            print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
-            else:
-                command = "dig {}".format(domain)
-            
+            os_choice=request.POST.get('os', '')
+
+            # Validate os selection against allowlist
+            if os_choice not in ALLOWED_COMMANDS:
+                output = "Invalid OS selection. Allowed values: win, linux."
+                return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
+
+            # Validate domain: only allow valid domain name characters
+            if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?$', domain) or '..' in domain:
+                output = "Invalid domain. Only alphanumeric characters, hyphens, and dots are allowed."
+                return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
+
+            command_name = ALLOWED_COMMANDS[os_choice]
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
                 process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
+                    [command_name, domain],
+                    shell=False,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
                 data = stdout.decode('utf-8')
                 stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
                 output = data + stderr
                 print(data + stderr)
             except:
