@@ -157,19 +157,17 @@ def sql_lab(request):
 
             if login.objects.filter(user=name):
 
-                sql_query = "SELECT * FROM introduction_login WHERE user=%s AND password=%s"
-                print(sql_query)
                 try:
                     print("\nin try\n")
-                    val=login.objects.raw(sql_query, [name, password])
+                    val=login.objects.filter(user=name, password=password)
                 except:
                     print("\nin except\n")
                     return render(
-                        request, 
+                        request,
                         'Lab/SQL/sql_lab.html',
                         {
                             "wrongpass":password,
-                            "sql_error":sql_query
+                            "sql_error":"Invalid credentials"
                         })
 
                 if val:
@@ -177,11 +175,11 @@ def sql_lab(request):
                     return render(request, 'Lab/SQL/sql_lab.html',{"user1":user})
                 else:
                     return render(
-                        request, 
+                        request,
                         'Lab/SQL/sql_lab.html',
                         {
                             "wrongpass":password,
-                            "sql_error":sql_query
+                            "sql_error":"Invalid credentials"
                         })
             else:
                 return render(request, 'Lab/SQL/sql_lab.html',{"no": "User not found"})
@@ -560,7 +558,7 @@ def a9_lab(request):
             try :
                 file=request.FILES["file"]
                 try :
-                    data = yaml.load(file,yaml.SafeLoader)
+                    data = yaml.safe_load(file)
                     
                     return render(request,"Lab/A9/a9_lab.html",{"data":data})
                 except:
@@ -864,7 +862,6 @@ def injection_sql_lab(request):
         print(password)
 
         if name:
-            sql_query = "SELECT * FROM introduction_sql_lab_table WHERE id=%s AND password=%s"
 
             sql_instance = sql_lab_table(id="admin", password="65079b006e85a7e798abecb99e47c154")
             sql_instance.save()
@@ -875,31 +872,29 @@ def injection_sql_lab(request):
             sql_instance = sql_lab_table(id="bloke", password="f8d1ce191319ea8f4d1d26e65e130dd5")
             sql_instance.save()
 
-            print(sql_query)
-
             try:
-                user = sql_lab_table.objects.raw(sql_query, [name, password])
-                user = user[0].id
+                user_qs = sql_lab_table.objects.filter(id=name, password=password)
+                user = user_qs[0].id
                 print(user)
 
             except:
                 return render(
-                    request, 
+                    request,
                     'Lab_2021/A3_Injection/sql_lab.html',
                     {
                         "wrongpass":password,
-                        "sql_error":sql_query
+                        "sql_error":"Invalid credentials"
                     })
 
             if user:
                 return render(request, 'Lab_2021/A3_Injection/sql_lab.html',{"user1":user})
             else:
                 return render(
-                    request, 
+                    request,
                     'Lab_2021/A3_Injection/sql_lab.html',
                     {
                         "wrongpass":password,
-                        "sql_error":sql_query
+                        "sql_error":"Invalid credentials"
                     })
         else:
             return render(request, 'Lab_2021/A3_Injection/sql_lab.html')
