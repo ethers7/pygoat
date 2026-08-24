@@ -7,8 +7,8 @@ import os
 import pickle
 import random
 import re
+import socket
 import string
-import subprocess
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
@@ -415,35 +415,36 @@ def cmd(request):
 def cmd_lab(request):
     if request.user.is_authenticated:
         if(request.method=="POST"):
-            domain=request.POST.get('domain')
+            domain = request.POST.get('domain', '')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            os=request.POST.get('os')
-            print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
-            else:
-                command = "dig {}".format(domain)
-            
+
+            # Validate domain: only allow valid hostname characters
+            if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?$', domain):
+                output = "Invalid domain name"
+                return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
-                process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
-                output = data + stderr
-                print(data + stderr)
-            except:
+                # Use socket for DNS resolution instead of subprocess
+                results = socket.getaddrinfo(domain, None)
+                # Collect unique IP addresses from results
+                seen = set()
+                lines = []
+                lines.append("DNS lookup results for: %s\n" % domain)
+                for family, socktype, proto, canonname, sockaddr in results:
+                    ip = sockaddr[0]
+                    family_name = "IPv6" if family == socket.AF_INET6 else "IPv4"
+                    entry = (ip, family_name)
+                    if entry not in seen:
+                        seen.add(entry)
+                        lines.append("%s: %s" % (family_name, ip))
+                output = "\n".join(lines)
+            except socket.gaierror as e:
+                output = "DNS lookup failed: %s" % str(e)
+            except Exception:
                 output = "Something went wrong"
-                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
-            print(output)
-            return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+                return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
+            return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
         else:
             return render(request, 'Lab/CMD/cmd_lab.html')
     else:
