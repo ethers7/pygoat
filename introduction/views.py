@@ -7,6 +7,7 @@ import os
 import pickle
 import random
 import re
+import shlex
 import string
 import subprocess
 import uuid
@@ -433,7 +434,7 @@ def cmd_lab(request):
 
             try:
                 process = subprocess.Popen(
-                    [cmd_name, domain],
+                    [cmd_name, shlex.quote(domain)],
                     shell=False,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
