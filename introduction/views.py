@@ -7,6 +7,7 @@ import os
 import pickle
 import random
 import re
+import shlex
 import string
 import subprocess
 import uuid
@@ -433,8 +434,9 @@ def cmd_lab(request):
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
             try:
+                validated_domain = shlex.quote(domain)
                 result = subprocess.run(
-                    [cmd_name, domain],
+                    [cmd_name, validated_domain],
                     shell=False,
                     capture_output=True,
                     timeout=30,
