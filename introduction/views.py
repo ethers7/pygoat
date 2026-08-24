@@ -1,13 +1,16 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import random
 import re
+import socket
 import string
 import subprocess
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
@@ -959,6 +962,9 @@ def ssrf_target(request):
     else:
         return render(request,"Lab/ssrf/ssrf_target.html",{"access_denied":True})
 
+SSRF_ALLOWED_HOSTS = {"example.com", "httpbin.org", "jsonplaceholder.typicode.com"}
+SSRF_MAX_RESPONSE_LENGTH = 5000
+
 @authentication_decorator
 def ssrf_lab2(request):
     if request.method == "GET":
@@ -967,10 +973,39 @@ def ssrf_lab2(request):
     elif request.method == "POST":
         url = request.POST["url"]
         try:
-            response = requests.get(url)
-            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
-            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+            parsed = urllib.parse.urlparse(url)
+            if parsed.scheme not in ("http", "https"):
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Only http and https schemes are allowed"})
+            hostname = parsed.hostname
+            if not hostname:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+            if hostname not in SSRF_ALLOWED_HOSTS:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Host not in allowlist"})
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            resolved_ips = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)
+            if not resolved_ips:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Could not resolve hostname"})
+            for family, type_, proto, canonname, sockaddr in resolved_ips:
+                ip = ipaddress.ip_address(sockaddr[0])
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                    return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Access to internal addresses is not allowed"})
+            # Use the first resolved IP to prevent DNS rebinding (TOCTOU)
+            resolved_ip = resolved_ips[0][4][0]
+            safe_url = urllib.parse.urlunparse((
+                parsed.scheme,
+                "[{}]:{}".format(resolved_ip, port) if ":" in resolved_ip else "{}:{}".format(resolved_ip, port),
+                parsed.path or "/",
+                parsed.params,
+                parsed.query,
+                parsed.fragment,
+            ))
+            response = requests.get(safe_url, headers={"Host": hostname}, timeout=5)
+            body = response.text[:SSRF_MAX_RESPONSE_LENGTH]
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": body})
+        except (socket.gaierror, ValueError):
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL or could not resolve host"})
+        except requests.RequestException:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Request failed"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
 def ssti(request):
