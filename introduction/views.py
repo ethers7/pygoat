@@ -1,15 +1,18 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import pickle
 import random
 import re
+import socket
 import string
 import subprocess
 import uuid
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
@@ -956,6 +959,23 @@ def ssrf_target(request):
     else:
         return render(request,"Lab/ssrf/ssrf_target.html",{"access_denied":True})
 
+def _validate_url_for_ssrf(url):
+    """Validate URL to prevent SSRF attacks."""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ('http', 'https'):
+            return False, "Only http and https schemes are allowed"
+        if not parsed.hostname:
+            return False, "Invalid URL"
+        resolved_ip = socket.gethostbyname(parsed.hostname)
+        ip = ipaddress.ip_address(resolved_ip)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            return False, "Access to internal addresses is not allowed"
+        return True, None
+    except (ValueError, socket.gaierror):
+        return False, "Invalid URL or hostname"
+
+
 @authentication_decorator
 def ssrf_lab2(request):
     if request.method == "GET":
@@ -963,10 +983,13 @@ def ssrf_lab2(request):
 
     elif request.method == "POST":
         url = request.POST["url"]
+        is_valid, error_msg = _validate_url_for_ssrf(url)
+        if not is_valid:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": error_msg})
         try:
             response = requests.get(url)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
