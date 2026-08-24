@@ -1,15 +1,18 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import pickle
 import random
 import re
+import socket
 import string
 import subprocess
 import uuid
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
@@ -965,9 +968,22 @@ def ssrf_lab2(request):
     elif request.method == "POST":
         url = request.POST["url"]
         try:
-            response = requests.get(url)
+            parsed = urlparse(url)
+            if parsed.scheme not in ("http", "https"):
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL scheme"})
+            hostname = parsed.hostname
+            if not hostname:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+            resolved_ips = socket.getaddrinfo(hostname, parsed.port or 80, proto=socket.IPPROTO_TCP)
+            for result in resolved_ips:
+                addr = ipaddress.ip_address(result[4][0])
+                if addr.is_private or addr.is_loopback or addr.is_reserved or addr.is_link_local:
+                    return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Access to internal addresses is not allowed"})
+            response = requests.get(url, allow_redirects=False, timeout=5)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+        except (socket.gaierror, socket.herror):
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Could not resolve hostname"})
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
