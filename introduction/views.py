@@ -1,14 +1,17 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import random
 import re
 import shlex
+import socket
 import string
 import subprocess
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
@@ -966,9 +969,36 @@ def ssrf_lab2(request):
     elif request.method == "POST":
         url = request.POST["url"]
         try:
-            response = requests.get(url)
-            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+            parsed = urllib.parse.urlparse(url)
+            if parsed.scheme not in ("http", "https"):
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Only http and https schemes are allowed"})
+            hostname = parsed.hostname
+            if not hostname:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            resolved_ips = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)
+            if not resolved_ips:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Could not resolve hostname"})
+            # Validate ALL resolved IPs before making the request
+            for family, type_, proto, canonname, sockaddr in resolved_ips:
+                ip = ipaddress.ip_address(sockaddr[0])
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                    return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Access to internal addresses is not allowed"})
+            # Pin request to the first validated IP to avoid TOCTOU DNS rebinding
+            validated_ip = resolved_ips[0][4][0]
+            # Build a URL using the validated IP directly
+            safe_url = urllib.parse.urlunparse((
+                parsed.scheme,
+                validated_ip + ":" + str(port),
+                parsed.path or "/",
+                parsed.params,
+                parsed.query,
+                parsed.fragment,
+            ))
+            # Preserve the original Host header so the target server routes correctly
+            resp = requests.get(safe_url, headers={"Host": hostname}, timeout=5, allow_redirects=False)
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": resp.content.decode(errors="replace")})
+        except (socket.gaierror, ValueError, requests.RequestException):
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
