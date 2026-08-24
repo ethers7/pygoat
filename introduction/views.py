@@ -1,13 +1,16 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import random
 import re
+import socket
 import string
 import subprocess
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
@@ -37,6 +40,41 @@ from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
 from .utility import customHash, filter_blog
+
+ALLOWED_SCHEMES = {"http", "https"}
+
+
+def _validate_url_for_ssrf(url):
+    """Validate a URL to prevent SSRF attacks.
+
+    Returns the validated URL string if safe, or None if the URL is potentially
+    dangerous (private/reserved IP, disallowed scheme, etc.).
+    """
+    parsed = urllib.parse.urlparse(url)
+
+    # Only allow http and https schemes
+    if parsed.scheme not in ALLOWED_SCHEMES:
+        return None
+
+    hostname = parsed.hostname
+    if not hostname:
+        return None
+
+    # Resolve hostname to IP and check against private/reserved ranges
+    try:
+        resolved_ip = socket.getaddrinfo(hostname, None, socket.AF_INET)[0][4][0]
+    except (socket.gaierror, IndexError):
+        return None
+
+    ip_obj = ipaddress.ip_address(resolved_ip)
+
+    # Block private, reserved, loopback, and link-local addresses
+    if (ip_obj.is_private or ip_obj.is_reserved or ip_obj.is_loopback
+            or ip_obj.is_link_local or ip_obj.is_multicast):
+        return None
+
+    return url
+
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -965,10 +1003,13 @@ def ssrf_lab2(request):
 
     elif request.method == "POST":
         url = request.POST["url"]
+        validated_url = _validate_url_for_ssrf(url)
+        if validated_url is None:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid or disallowed URL"})
         try:
-            response = requests.get(url)
+            response = requests.get(validated_url)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
