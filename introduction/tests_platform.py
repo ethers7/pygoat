@@ -62,6 +62,36 @@ class PlatformRegressionTests(TestCase):
         self.assertEqual(self.client.get("/cmd").status_code, 200)
         self.assertEqual(self.client.get("/cmd_lab").status_code, 200)
 
+    def test_cmd_lab_rejects_invalid_domain(self):
+        """Domain with shell metacharacters is rejected by allowlist validation."""
+        self.client.force_login(self.user)
+        # Attempt command injection via semicolon
+        r = self.client.post("/cmd_lab", {"domain": "example.com; cat /etc/passwd", "os": "linux"})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Invalid domain name")
+
+    def test_cmd_lab_rejects_backtick_injection(self):
+        """Domain with backticks is rejected."""
+        self.client.force_login(self.user)
+        r = self.client.post("/cmd_lab", {"domain": "`whoami`.example.com", "os": "linux"})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Invalid domain name")
+
+    def test_cmd_lab_rejects_pipe_injection(self):
+        """Domain with pipe character is rejected."""
+        self.client.force_login(self.user)
+        r = self.client.post("/cmd_lab", {"domain": "example.com|ls", "os": "linux"})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Invalid domain name")
+
+    def test_cmd_lab_accepts_valid_domain(self):
+        """A valid domain passes validation and reaches subprocess."""
+        self.client.force_login(self.user)
+        r = self.client.post("/cmd_lab", {"domain": "example.com", "os": "linux"})
+        self.assertEqual(r.status_code, 200)
+        # Should not show invalid domain error
+        self.assertNotContains(r, "Invalid domain name")
+
     def test_other_lesson_pages_still_route(self):
         self.client.force_login(self.user)
         for name in ("xss", "sql"):
