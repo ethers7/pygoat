@@ -414,23 +414,36 @@ def cmd(request):
         return render(request,'Lab/CMD/cmd.html')
     else:
         return redirect('login')
+# Valid domain characters: alphanumeric, hyphens, dots (no shell metacharacters)
+_DOMAIN_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9.\-]{0,253}[a-zA-Z0-9]$')
+
+
+def _sanitize_domain(raw_domain):
+    """Validate and sanitize a raw domain string for safe use in subprocess args.
+
+    Returns the sanitized domain string. Raises ValueError if invalid.
+    """
+    if not raw_domain:
+        raise ValueError("Empty domain")
+    # Remove all common protocols (case-insensitive) and www prefix
+    cleaned = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', raw_domain, flags=re.IGNORECASE)
+    # Strip any trailing path/query from the domain
+    cleaned = cleaned.split('/')[0].split('?')[0].split('#')[0].strip()
+    if not cleaned or not _DOMAIN_RE.match(cleaned):
+        raise ValueError("Invalid domain")
+    return cleaned
+
+
 @csrf_exempt
 def cmd_lab(request):
     # Allowlist of permitted DNS lookup commands
     ALLOWED_COMMANDS = {"nslookup": "nslookup", "dig": "dig"}
-    # Valid domain characters: alphanumeric, hyphens, dots (no shell metacharacters)
-    DOMAIN_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9.\-]{0,253}[a-zA-Z0-9]$')
 
     if request.user.is_authenticated:
         if(request.method=="POST"):
-            domain=request.POST.get('domain')
-            # Remove all common protocols (case-insensitive) and www prefix
-            domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            # Strip any trailing path/query from the domain
-            domain = domain.split('/')[0].split('?')[0].split('#')[0].strip()
-
-            # Validate domain against allowlist of safe characters
-            if not domain or not DOMAIN_RE.match(domain):
+            try:
+                domain = _sanitize_domain(request.POST.get('domain', ''))
+            except ValueError:
                 output = "Invalid domain name"
                 return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
 
