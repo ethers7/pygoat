@@ -17,7 +17,9 @@ from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
 from random import randint
-from xml.dom.pulldom import START_ELEMENT, parseString
+from defusedxml.pulldom import parseString
+
+START_ELEMENT = "START_ELEMENT"
 from xml.sax import make_parser
 from xml.sax.handler import feature_external_ges
 
