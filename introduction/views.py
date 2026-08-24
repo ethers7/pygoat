@@ -1,14 +1,17 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import pickle
 import random
 import re
+import socket
 import string
 import subprocess
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
@@ -967,6 +970,37 @@ def ssrf_target(request):
     else:
         return render(request,"Lab/ssrf/ssrf_target.html",{"access_denied":True})
 
+_SSRF_ALLOWED_SCHEMES = {"http", "https"}
+_SSRF_MAX_RESPONSE_LENGTH = 5000
+
+
+def _validate_url_for_ssrf(url):
+    """Validate a URL against SSRF attacks.
+
+    Returns (resolved_ip, error_message). If error_message is not None the URL
+    is unsafe.
+    """
+    parsed = urllib.parse.urlparse(url)
+
+    if parsed.scheme not in _SSRF_ALLOWED_SCHEMES:
+        return None, "Only http and https schemes are allowed"
+
+    hostname = parsed.hostname
+    if not hostname:
+        return None, "URL must contain a valid hostname"
+
+    try:
+        resolved_ip = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)[0][4][0]
+    except socket.gaierror:
+        return None, "Could not resolve hostname"
+
+    ip_obj = ipaddress.ip_address(resolved_ip)
+    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_reserved:
+        return None, "URL resolves to a disallowed internal address"
+
+    return resolved_ip, None
+
+
 @authentication_decorator
 def ssrf_lab2(request):
     if request.method == "GET":
@@ -974,10 +1008,16 @@ def ssrf_lab2(request):
 
     elif request.method == "POST":
         url = request.POST["url"]
+
+        resolved_ip, error = _validate_url_for_ssrf(url)
+        if error:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": error})
+
         try:
-            response = requests.get(url)
-            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+            response = requests.get(url, timeout=5, allow_redirects=False)
+            body = response.text[:_SSRF_MAX_RESPONSE_LENGTH]
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": body})
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
