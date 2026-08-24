@@ -6,8 +6,8 @@ import logging
 import os
 import random
 import re
+import socket
 import string
-import subprocess
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
@@ -421,26 +421,16 @@ def cmd_lab(request):
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             # Assign validated domain to a local variable
             validated_domain = str(raw_domain)
-            os_choice = request.POST.get('os')
-            print(os_choice)
-            # Allowlist of permitted commands
-            ALLOWED_COMMANDS = {'win': 'nslookup', 'linux': 'dig'}
-            if os_choice == 'win':
-                cmd_name = ALLOWED_COMMANDS['win']
-            else:
-                cmd_name = ALLOWED_COMMANDS['linux']
-
             try:
-                result = subprocess.run(
-                    [cmd_name, validated_domain],
-                    shell=False,
-                    capture_output=True,
-                    timeout=30,
-                    check=False)
-                data = result.stdout.decode('utf-8')
-                stderr_output = result.stderr.decode('utf-8')
-                output = data + stderr_output
-                print(data + stderr_output)
+                results = socket.getaddrinfo(validated_domain, None)
+                addresses = set()
+                for addrinfo in results:
+                    addresses.add(addrinfo[4][0])
+                output = f"DNS lookup for {validated_domain}:\n"
+                for addr in sorted(addresses):
+                    output += f"  Address: {addr}\n"
+            except socket.gaierror as e:
+                output = f"DNS lookup failed: {e}"
             except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
