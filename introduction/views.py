@@ -7,7 +7,6 @@ import os
 import random
 import re
 import string
-import subprocess
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
@@ -409,7 +408,6 @@ def cmd(request):
         return render(request,'Lab/CMD/cmd.html')
     else:
         return redirect('login')
-_ALLOWED_COMMANDS = {'win': 'nslookup', 'linux': 'dig'}
 _DOMAIN_PATTERN = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$')
 
 
@@ -432,23 +430,17 @@ def cmd_lab(request):
                 output = "Invalid domain name"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
-            if os_type == 'win':
-                cmd_name = _ALLOWED_COMMANDS['win']
-            else:
-                cmd_name = _ALLOWED_COMMANDS['linux']
-
             try:
-                process = subprocess.Popen(
-                    [cmd_name, validated_domain],
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                output = data + stderr
-                print(data + stderr)
-            except:
+                import socket
+                results = socket.getaddrinfo(validated_domain, None)
+                output = '\n'.join(
+                    f"{r[0].name} {r[4][0]}" for r in results
+                )
+                if not output:
+                    output = "No DNS records found"
+            except socket.gaierror as e:
+                output = f"DNS lookup failed: {e}"
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
