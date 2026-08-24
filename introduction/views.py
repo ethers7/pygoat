@@ -7,6 +7,7 @@ import os
 import pickle
 import random
 import re
+import shlex
 import string
 import subprocess
 import uuid
@@ -418,25 +419,28 @@ def cmd_lab(request):
             domain=request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            os=request.POST.get('os')
-            print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
-            else:
-                command = "dig {}".format(domain)
-            
+            # Validate domain: only allow alphanumeric, dots, hyphens, and colons (for port)
+            if not re.match(r'^[a-zA-Z0-9.\-:]+$', domain):
+                output = "Invalid domain"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+            os_type=request.POST.get('os')
+            print(os_type)
+            # Allowlist of permitted commands
+            allowed_commands = {'win': 'nslookup', 'linux': 'dig'}
+            cmd_name = allowed_commands.get(os_type)
+            if cmd_name is None:
+                output = "Invalid OS selection"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
                 process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
+                    [cmd_name, shlex.quote(domain)],
+                    shell=False,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
                 data = stdout.decode('utf-8')
                 stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
                 output = data + stderr
                 print(data + stderr)
             except:
@@ -557,7 +561,7 @@ def a9_lab(request):
             try :
                 file=request.FILES["file"]
                 try :
-                    data = yaml.load(file,yaml.Loader)
+                    data = yaml.safe_load(file)
                     
                     return render(request,"Lab/A9/a9_lab.html",{"data":data})
                 except:
@@ -861,8 +865,6 @@ def injection_sql_lab(request):
         print(password)
 
         if name:
-            sql_query = "SELECT * FROM introduction_sql_lab_table WHERE id='"+name+"'AND password='"+password+"'"
-
             sql_instance = sql_lab_table(id="admin", password="65079b006e85a7e798abecb99e47c154")
             sql_instance.save()
             sql_instance = sql_lab_table(id="jack", password="jack")
@@ -872,31 +874,29 @@ def injection_sql_lab(request):
             sql_instance = sql_lab_table(id="bloke", password="f8d1ce191319ea8f4d1d26e65e130dd5")
             sql_instance.save()
 
-            print(sql_query)
-
             try:
-                user = sql_lab_table.objects.raw(sql_query)
-                user = user[0].id
+                user_obj = sql_lab_table.objects.filter(id=name, password=password).first()
+                user = user_obj.id if user_obj else None
                 print(user)
 
             except:
                 return render(
-                    request, 
+                    request,
                     'Lab_2021/A3_Injection/sql_lab.html',
                     {
                         "wrongpass":password,
-                        "sql_error":sql_query
+                        "sql_error":"Invalid query parameters"
                     })
 
             if user:
                 return render(request, 'Lab_2021/A3_Injection/sql_lab.html',{"user1":user})
             else:
                 return render(
-                    request, 
+                    request,
                     'Lab_2021/A3_Injection/sql_lab.html',
                     {
                         "wrongpass":password,
-                        "sql_error":sql_query
+                        "sql_error":"Invalid query parameters"
                     })
         else:
             return render(request, 'Lab_2021/A3_Injection/sql_lab.html')
