@@ -94,3 +94,35 @@ class PlatformRegressionTests(TestCase):
         )
         self.assertEqual(r.status_code, 302)
         self.assertEqual(self.client.get("/").status_code, 200)
+
+    def test_cmd_lab_rejects_invalid_domain(self):
+        """Command injection via shell metacharacters is blocked."""
+        self.client.force_login(self.user)
+        r = self.client.post(
+            "/cmd_lab",
+            {"domain": "example.com; cat /etc/passwd", "os": "linux"},
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Invalid domain name")
+
+    def test_cmd_lab_rejects_unknown_os(self):
+        """Only allowlisted OS values are accepted."""
+        self.client.force_login(self.user)
+        r = self.client.post(
+            "/cmd_lab",
+            {"domain": "example.com", "os": "unknown"},
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Invalid OS selection")
+
+    def test_cmd_lab_valid_request(self):
+        """Valid domain and OS proceeds without error page."""
+        self.client.force_login(self.user)
+        r = self.client.post(
+            "/cmd_lab",
+            {"domain": "example.com", "os": "linux"},
+        )
+        self.assertEqual(r.status_code, 200)
+        # Should not show validation errors
+        self.assertNotContains(r, "Invalid domain name")
+        self.assertNotContains(r, "Invalid OS selection")
