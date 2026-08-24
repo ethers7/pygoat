@@ -974,7 +974,8 @@ def ssrf_lab2(request):
                 ip = ipaddress.ip_address(addr_info[4][0])
                 if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
                     return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Access to internal addresses is not allowed"})
-            response = requests.get(url)
+            validated_url = urllib.parse.urlunparse(parsed)
+            response = requests.get(validated_url)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
         except socket.gaierror:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
