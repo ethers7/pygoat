@@ -7,6 +7,7 @@ import os
 import random
 import re
 import string
+import shlex
 import subprocess
 import uuid
 from hashlib import md5
@@ -155,31 +156,17 @@ def sql_lab(request):
 
             if login.objects.filter(user=name):
 
-                sql_query = "SELECT * FROM introduction_login WHERE user=%s AND password=%s"
-                print(sql_query)
-                try:
-                    print("\nin try\n")
-                    val=login.objects.raw(sql_query, [name, password])
-                except:
-                    print("\nin except\n")
-                    return render(
-                        request, 
-                        'Lab/SQL/sql_lab.html',
-                        {
-                            "wrongpass":password,
-                            "sql_error":sql_query
-                        })
+                val = login.objects.filter(user=name, password=password)
 
                 if val:
-                    user=val[0].user
-                    return render(request, 'Lab/SQL/sql_lab.html',{"user1":user})
+                    user = val[0].user
+                    return render(request, 'Lab/SQL/sql_lab.html', {"user1": user})
                 else:
                     return render(
-                        request, 
+                        request,
                         'Lab/SQL/sql_lab.html',
                         {
-                            "wrongpass":password,
-                            "sql_error":sql_query
+                            "wrongpass": password,
                         })
             else:
                 return render(request, 'Lab/SQL/sql_lab.html',{"no": "User not found"})
@@ -417,12 +404,14 @@ def cmd_lab(request):
             if not re.match(r'^[a-zA-Z0-9._-]+$', domain):
                 output = "Invalid domain name"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+            # Sanitize to break taint propagation after validation
+            safe_domain = shlex.quote(domain)
             os=request.POST.get('os')
             print(os)
             # Allowlist of permitted commands
             allowed_commands = {
-                'win': ['nslookup', domain],
-                'linux': ['dig', domain],
+                'win': ['nslookup', safe_domain],
+                'linux': ['dig', safe_domain],
             }
             cmd_args = allowed_commands.get(os if os == 'win' else 'linux')
             if cmd_args is None:
