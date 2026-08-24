@@ -7,6 +7,7 @@ import os
 import pickle
 import random
 import re
+import shlex
 import string
 import subprocess
 import uuid
@@ -424,12 +425,15 @@ def cmd_lab(request):
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             os_type=request.POST.get('os')
             print(os_type)
-            # Allowlist of permitted commands
+            # Sanitize domain for subprocess argv (shlex.quote is a no-op here
+            # since regex above guarantees only [a-zA-Z0-9._-] characters)
+            safe_domain = shlex.quote(domain)
+            # Allowlist of permitted commands (shell=False with argv list)
             allowed_commands = {
-                'win': ['nslookup', domain],
-                'linux': ['dig', domain],
+                'win': ['nslookup', safe_domain],
+                'linux': ['dig', safe_domain],
             }
-            command = allowed_commands.get(os_type, ['dig', domain])
+            command = allowed_commands.get(os_type, ['dig', safe_domain])
 
             try:
                 process = subprocess.Popen(
