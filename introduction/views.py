@@ -413,30 +413,44 @@ def cmd(request):
         return redirect('login')
 @csrf_exempt
 def cmd_lab(request):
+    # Allowlist of permitted DNS lookup commands
+    ALLOWED_COMMANDS = {"nslookup", "dig"}
+
     if request.user.is_authenticated:
         if(request.method=="POST"):
             domain=request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            os=request.POST.get('os')
-            print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
+
+            # Validate domain: only allow valid hostname characters (alphanumeric, hyphens, dots)
+            if not domain or not re.match(r'^[a-zA-Z0-9._-]+$', domain):
+                output = "Invalid domain name"
+                return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
+
+            os_choice = request.POST.get('os')
+            print(os_choice)
+            if os_choice == 'win':
+                cmd_name = "nslookup"
             else:
-                command = "dig {}".format(domain)
-            
+                cmd_name = "dig"
+
+            # Verify command is in the allowlist
+            if cmd_name not in ALLOWED_COMMANDS:
+                output = "Command not allowed"
+                return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
+
+            # Build command as a list (argv) to avoid shell injection
+            cmd_parts = [cmd_name, domain]
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
                 process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
+                    cmd_parts,
+                    shell=False,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
                 data = stdout.decode('utf-8')
                 stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
                 output = data + stderr
                 print(data + stderr)
             except:
