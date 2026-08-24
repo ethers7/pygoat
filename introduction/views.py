@@ -411,6 +411,12 @@ def cmd(request):
         return render(request,'Lab/CMD/cmd.html')
     else:
         return redirect('login')
+# Allowlist of permitted DNS lookup commands for the command injection lab
+ALLOWED_CMD_LAB_COMMANDS = {
+    'win': 'nslookup',
+    'linux': 'dig',
+}
+
 @csrf_exempt
 def cmd_lab(request):
     if request.user.is_authenticated:
@@ -420,25 +426,36 @@ def cmd_lab(request):
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
             os=request.POST.get('os')
             print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
-            else:
-                command = "dig {}".format(domain)
-            
+
+            # Validate the OS selection against the allowlist
+            if os not in ALLOWED_CMD_LAB_COMMANDS:
+                output = "Invalid OS selection. Allowed values: win, linux."
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+
+            # Validate domain: reject shell metacharacters and empty input
+            if not domain or not re.match(r'^[a-zA-Z0-9._-]+$', domain):
+                output = "Invalid domain. Only alphanumeric characters, dots, hyphens, and underscores are allowed."
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+
+            # Use allowlisted command with shell=False and argument list
+            allowed_command = ALLOWED_CMD_LAB_COMMANDS[os]
+            cmd_args = [allowed_command, domain]
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
                 process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
+                    cmd_args,
+                    shell=False,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
+                stdout, stderr = process.communicate(timeout=30)
                 data = stdout.decode('utf-8')
                 stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
                 output = data + stderr
                 print(data + stderr)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                output = "Command timed out"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             except:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
