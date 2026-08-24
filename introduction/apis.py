@@ -4,7 +4,6 @@ import requests
 from django.contrib.auth import authenticate, login
 from django.http import JsonResponse
 from django.shortcuts import redirect
-from django.views.decorators.csrf import csrf_exempt
 
 from introduction.playground.A6.utility import check_vuln
 from introduction.playground.A9.main import Log
@@ -19,7 +18,6 @@ from .views import authentication_decorator
 # 2. extract inputs form 2nd code 
 # 3. Run the code 
 # 4. get the result
-@csrf_exempt
 def ssrf_code_checker(request):
     if request.user.is_authenticated:
         if request.method == 'POST':
@@ -56,7 +54,6 @@ def ssrf_code_checker(request):
 # Insufficient Logging & Monitoring
 
 
-@csrf_exempt
 # @authentication_decorator
 def log_function_checker(request):
     if request.method == 'POST':
@@ -90,7 +87,6 @@ def log_function_checker(request):
         return JsonResponse({"message":"method not allowed"},status = 405)
 
 #a7 codechecking api
-@csrf_exempt
 def A7_disscussion_api(request):
     if request.method != 'POST':
         return JsonResponse({"message":"method not allowed"},status = 405)
@@ -109,7 +105,6 @@ def A7_disscussion_api(request):
     return JsonResponse({"message":"failure"},status = 400)
 
 #a6 codechecking api
-@csrf_exempt
 def A6_disscussion_api(request):
     test_bench = ["Pillow==8.0.0","PyJWT==2.4.0","requests==2.28.0","Django==4.0.4"]
     
@@ -122,7 +117,6 @@ def A6_disscussion_api(request):
     except Exception as e:
         return JsonResponse({"message":"failure"},status = 400)
 
-@csrf_exempt
 def A6_disscussion_api_2(request):
     if request.method != 'POST':
         return JsonResponse({"message":"method not allowed"},status = 405)
