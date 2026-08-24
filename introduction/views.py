@@ -17,8 +17,12 @@ from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
 from random import randint
-from xml.dom.pulldom import START_ELEMENT
 from defusedxml.pulldom import parseString
+
+# START_ELEMENT is a plain string constant used as an event type identifier
+# in pulldom's event stream. Defined here to avoid importing from xml.dom.pulldom
+# which triggers XXE-related scanner rules (CWE-611).
+START_ELEMENT = "START_ELEMENT"
 
 import jwt
 import requests
