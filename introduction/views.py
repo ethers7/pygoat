@@ -7,10 +7,8 @@ import logging
 import os
 import random
 import re
-import shlex
 import socket
 import string
-import subprocess
 import uuid
 from urllib.parse import urlparse
 from dataclasses import dataclass
@@ -431,23 +429,19 @@ def cmd_lab(request):
                 output = "Invalid OS selection"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             cmd_binary = ALLOWED_COMMANDS[os]
-            # Sanitize domain for subprocess to prevent command injection
-            safe_domain = shlex.quote(domain)
 
             try:
-                process = subprocess.Popen(
-                    [cmd_binary, safe_domain],
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
-                output = data + stderr
-                print(data + stderr)
-            except:
+                # Use socket.getaddrinfo for DNS resolution instead of subprocess
+                # This eliminates command injection surface entirely
+                addr_info = socket.getaddrinfo(domain, None)
+                resolved_addresses = sorted(set(addr[4][0] for addr in addr_info))
+                output = "DNS lookup for {domain}:\n".format(domain=domain)
+                output += "\n".join(resolved_addresses)
+                print(output)
+            except socket.gaierror as e:
+                output = "DNS resolution failed: {err}".format(err=str(e))
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
