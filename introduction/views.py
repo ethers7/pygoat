@@ -7,6 +7,7 @@ import os
 import pickle
 import random
 import re
+import shlex
 import string
 import subprocess
 import uuid
@@ -438,6 +439,8 @@ def cmd_lab(request):
                 cmd_name = ALLOWED_COMMANDS['linux']
 
             # Build command as a list for shell=False (no shell interpretation)
+            # Sanitize domain to prevent command injection via user input
+            domain = shlex.quote(domain)
             cmd_args = [cmd_name, domain]
 
             try:
