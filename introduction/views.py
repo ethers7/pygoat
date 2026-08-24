@@ -160,7 +160,7 @@ def sql_lab(request):
                 print(sql_query)
                 try:
                     print("\nin try\n")
-                    val=login.objects.raw(sql_query, sql_params)
+                    val=login.objects.filter(user=name, password=password)
                 except:
                     print("\nin except\n")
                     return render(
@@ -877,7 +877,7 @@ def injection_sql_lab(request):
             print(sql_query)
 
             try:
-                user = sql_lab_table.objects.raw(sql_query, sql_params)
+                user = sql_lab_table.objects.filter(id=name, password=password)
                 user = user[0].id
                 print(user)
 
