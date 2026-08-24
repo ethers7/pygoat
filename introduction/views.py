@@ -1,3 +1,4 @@
+import ast
 import base64
 import datetime
 import hashlib
@@ -582,7 +583,21 @@ def a9_lab2(request):
             img = img.convert("RGB")
             r,g,b  = img.split()
             # function_str = "convert(r+g, '1')"
-            output = ImageMath.eval(function_str,img = img, b=b, r=r, g=g)
+            # Validate function_str to only allow safe ImageMath operations
+            _ALLOWED_IMAGEMATH_PATTERN = re.compile(
+                r'^[a-zA-Z0-9_\s\+\-\*\/\(\)\,\.\'\"\|&\^~%]+$'
+            )
+            _ALLOWED_IMAGEMATH_NAMES = {
+                'convert', 'min', 'max', 'abs', 'int', 'float',
+                'r', 'g', 'b', 'img',
+            }
+            if not function_str or not _ALLOWED_IMAGEMATH_PATTERN.match(function_str):
+                return render(request, "Lab/A9/a9_lab2.html", {"data": "Invalid expression", "error": True})
+            # Reject any identifiers not in the allowlist
+            _identifiers = set(re.findall(r'[a-zA-Z_][a-zA-Z0-9_]*', function_str))
+            if not _identifiers.issubset(_ALLOWED_IMAGEMATH_NAMES):
+                return render(request, "Lab/A9/a9_lab2.html", {"data": "Invalid expression", "error": True})
+            output = ImageMath.eval(function_str, img=img, b=b, r=r, g=g)
 
             # saving the image 
             buffered = BytesIO()
