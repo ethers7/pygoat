@@ -8,6 +8,7 @@ import pickle
 import random
 import re
 import shlex
+import socket
 import string
 import subprocess
 import uuid
@@ -419,36 +420,37 @@ def cmd_lab(request):
             domain=request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            # Validate domain: only allow valid domain name characters (alphanumeric, dots, hyphens, colons for port)
-            if not re.match(r'^[a-zA-Z0-9.\-:]+$', domain):
+            # Strip port if present (getaddrinfo handles port separately)
+            domain = domain.split(':')[0]
+            # Validate domain: only allow valid domain name characters (alphanumeric, dots, hyphens)
+            if not re.match(r'^[a-zA-Z0-9.\-]+$', domain):
                 output = "Invalid domain name"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
-            os_type=request.POST.get('os')
-            print(os_type)
-            # Allowlist of permitted commands
-            allowed_commands = {
-                'win': 'nslookup',
-                'linux': 'dig',
-            }
-            cmd_name = allowed_commands.get(os_type, 'dig')
-            sanitized_domain = shlex.quote(domain)
-            cmd_args = [cmd_name, sanitized_domain]
 
             try:
-                process = subprocess.Popen(
-                    cmd_args,
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                output = data + stderr
-                print(data + stderr)
-            except:
+                # Use Python socket for DNS resolution instead of subprocess
+                results = socket.getaddrinfo(domain, None)
+                # Format results similar to nslookup/dig output
+                lines = []
+                lines.append("DNS lookup results for: {}".format(domain))
+                lines.append("")
+                seen = set()
+                for family, socktype, proto, canonname, sockaddr in results:
+                    addr = sockaddr[0]
+                    if addr not in seen:
+                        seen.add(addr)
+                        family_name = "IPv6" if family == socket.AF_INET6 else "IPv4"
+                        lines.append("Address: {} ({})".format(addr, family_name))
+                if not seen:
+                    lines.append("No addresses found")
+                output = "\n".join(lines)
+                print(output)
+            except socket.gaierror as e:
+                output = "DNS lookup failed: {}".format(str(e))
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
-            print(output)
             return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
         else:
             return render(request, 'Lab/CMD/cmd_lab.html')
