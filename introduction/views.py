@@ -1,15 +1,17 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import pickle
 import random
 import re
+import socket
 import string
-import subprocess
 import uuid
+from urllib.parse import urlparse, urlunparse
 from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
@@ -413,36 +415,39 @@ def cmd(request):
         return redirect('login')
 @csrf_exempt
 def cmd_lab(request):
+    # Strict hostname/IP validation: only alphanumeric, dots, hyphens, colons (IPv6)
+    VALID_DOMAIN_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9.\-:]{0,253}[a-zA-Z0-9]$')
+
     if request.user.is_authenticated:
         if(request.method=="POST"):
-            domain=request.POST.get('domain')
+            domain=request.POST.get('domain', '')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            os=request.POST.get('os')
-            print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
-            else:
-                command = "dig {}".format(domain)
-            
+            # Strip any trailing path/query components
+            domain = domain.split('/')[0].split('?')[0].split('#')[0].strip()
+
+            # Validate domain against strict pattern to prevent injection
+            if not domain or not VALID_DOMAIN_RE.match(domain):
+                output = "Invalid domain name. Only alphanumeric characters, dots, and hyphens are allowed."
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
-                process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
-                output = data + stderr
-                print(data + stderr)
-            except:
+                # Use Python's socket module for DNS resolution instead of subprocess
+                results = socket.getaddrinfo(domain, None)
+                # Deduplicate resolved addresses while preserving order
+                seen = set()
+                addresses = []
+                for r in results:
+                    addr = r[4][0]
+                    if addr not in seen:
+                        seen.add(addr)
+                        addresses.append(addr)
+                output = "DNS resolution for {}:\n{}".format(domain, "\n".join(addresses))
+            except socket.gaierror as e:
+                output = "DNS lookup failed for {}: {}".format(domain, str(e))
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
-            print(output)
             return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
         else:
             return render(request, 'Lab/CMD/cmd_lab.html')
@@ -557,7 +562,7 @@ def a9_lab(request):
             try :
                 file=request.FILES["file"]
                 try :
-                    data = yaml.load(file,yaml.Loader)
+                    data = yaml.safe_load(file)
                     
                     return render(request,"Lab/A9/a9_lab.html",{"data":data})
                 except:
@@ -861,8 +866,6 @@ def injection_sql_lab(request):
         print(password)
 
         if name:
-            sql_query = "SELECT * FROM introduction_sql_lab_table WHERE id='"+name+"'AND password='"+password+"'"
-
             sql_instance = sql_lab_table(id="admin", password="65079b006e85a7e798abecb99e47c154")
             sql_instance.save()
             sql_instance = sql_lab_table(id="jack", password="jack")
@@ -872,31 +875,29 @@ def injection_sql_lab(request):
             sql_instance = sql_lab_table(id="bloke", password="f8d1ce191319ea8f4d1d26e65e130dd5")
             sql_instance.save()
 
-            print(sql_query)
-
             try:
-                user = sql_lab_table.objects.raw(sql_query)
-                user = user[0].id
+                user_obj = sql_lab_table.objects.filter(id=name, password=password).first()
+                user = user_obj.id if user_obj else None
                 print(user)
 
-            except:
+            except Exception:
                 return render(
-                    request, 
+                    request,
                     'Lab_2021/A3_Injection/sql_lab.html',
                     {
                         "wrongpass":password,
-                        "sql_error":sql_query
+                        "sql_error":"Query failed"
                     })
 
             if user:
                 return render(request, 'Lab_2021/A3_Injection/sql_lab.html',{"user1":user})
             else:
                 return render(
-                    request, 
+                    request,
                     'Lab_2021/A3_Injection/sql_lab.html',
                     {
                         "wrongpass":password,
-                        "sql_error":sql_query
+                        "sql_error":"No matching user found"
                     })
         else:
             return render(request, 'Lab_2021/A3_Injection/sql_lab.html')
@@ -959,10 +960,48 @@ def ssrf_lab2(request):
 
     elif request.method == "POST":
         url = request.POST["url"]
+
+        # Validate URL scheme and host to prevent SSRF
         try:
-            response = requests.get(url)
+            parsed = urlparse(url)
+        except Exception:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+
+        if parsed.scheme not in ("http", "https"):
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL scheme"})
+
+        hostname = parsed.hostname
+        if not hostname:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+
+        # Resolve hostname and check that it does not point to a private/internal address
+        try:
+            resolved_ips = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        except socket.gaierror:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Could not resolve hostname"})
+
+        if not resolved_ips:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Could not resolve hostname"})
+
+        for result in resolved_ips:
+            ip = ipaddress.ip_address(result[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Requests to internal addresses are not allowed"})
+
+        # Use the first resolved IP directly to prevent DNS rebinding attacks
+        safe_ip = resolved_ips[0][4][0]
+        port = parsed.port
+        if port:
+            netloc = f"[{safe_ip}]:{port}" if ":" in safe_ip else f"{safe_ip}:{port}"
+        else:
+            netloc = f"[{safe_ip}]" if ":" in safe_ip else safe_ip
+
+        safe_url = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+
+        try:
+            response = requests.get(safe_url, headers={"Host": hostname}, timeout=5, allow_redirects=False)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
