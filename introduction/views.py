@@ -1,12 +1,14 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import pickle
 import random
 import re
+import socket
 import string
 import subprocess
 import uuid
@@ -14,6 +16,7 @@ from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
 from random import randint
+from urllib.parse import urlparse
 from xml.dom.pulldom import START_ELEMENT, parseString
 from xml.sax import make_parser
 from xml.sax.handler import feature_external_ges
@@ -952,6 +955,40 @@ def ssrf_target(request):
     else:
         return render(request,"Lab/ssrf/ssrf_target.html",{"access_denied":True})
 
+def _validate_url_for_ssrf(url):
+    """Validate a URL to prevent SSRF attacks.
+
+    Returns (is_valid, error_message) tuple.
+    Rejects non-http(s) schemes and private/internal/link-local IPs.
+    """
+    ALLOWED_SCHEMES = ("http", "https")
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ALLOWED_SCHEMES:
+        return False, "Only http and https schemes are allowed"
+
+    hostname = parsed.hostname
+    if not hostname:
+        return False, "Invalid URL: missing hostname"
+
+    try:
+        resolved_ip = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except socket.gaierror:
+        return False, "Invalid URL: unable to resolve hostname"
+
+    for family, socktype, proto, canonname, sockaddr in resolved_ip:
+        ip_str = sockaddr[0]
+        ip_obj = ipaddress.ip_address(ip_str)
+        if (ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local
+                or ip_obj.is_multicast or ip_obj.is_reserved or ip_obj.is_unspecified):
+            return False, "Access to internal/private network addresses is not allowed"
+        # Block cloud metadata endpoints (169.254.169.254)
+        if ip_str == "169.254.169.254":
+            return False, "Access to cloud metadata endpoint is not allowed"
+
+    return True, None
+
+
 @authentication_decorator
 def ssrf_lab2(request):
     if request.method == "GET":
@@ -959,10 +996,13 @@ def ssrf_lab2(request):
 
     elif request.method == "POST":
         url = request.POST["url"]
+        is_valid, error_msg = _validate_url_for_ssrf(url)
+        if not is_valid:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": error_msg})
         try:
             response = requests.get(url)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
