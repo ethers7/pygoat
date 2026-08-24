@@ -8,6 +8,7 @@ import os
 import pickle
 import random
 import re
+import shlex
 import socket
 import string
 import subprocess
@@ -447,7 +448,7 @@ def cmd_lab(request):
                 cmd_key = 'linux'
 
             cmd_path = ALLOWED_COMMANDS[cmd_key]
-            cmd_args = [cmd_path, domain]
+            cmd_args = [cmd_path, shlex.quote(domain)]
 
             try:
                 process = subprocess.Popen(
@@ -882,8 +883,6 @@ def injection_sql_lab(request):
         print(password)
 
         if name:
-            sql_query = "SELECT * FROM introduction_sql_lab_table WHERE id=%s AND password=%s"
-
             sql_instance = sql_lab_table(id="admin", password="65079b006e85a7e798abecb99e47c154")
             sql_instance.save()
             sql_instance = sql_lab_table(id="jack", password="jack")
@@ -893,31 +892,29 @@ def injection_sql_lab(request):
             sql_instance = sql_lab_table(id="bloke", password="f8d1ce191319ea8f4d1d26e65e130dd5")
             sql_instance.save()
 
-            print(sql_query)
-
             try:
-                user = sql_lab_table.objects.raw(sql_query, [name, password])
-                user = user[0].id
+                user_obj = sql_lab_table.objects.filter(id=name, password=password).first()
+                user = user_obj.id if user_obj else None
                 print(user)
 
-            except:
+            except Exception:
                 return render(
-                    request, 
+                    request,
                     'Lab_2021/A3_Injection/sql_lab.html',
                     {
                         "wrongpass":password,
-                        "sql_error":sql_query
+                        "sql_error":"Query failed"
                     })
 
             if user:
                 return render(request, 'Lab_2021/A3_Injection/sql_lab.html',{"user1":user})
             else:
                 return render(
-                    request, 
+                    request,
                     'Lab_2021/A3_Injection/sql_lab.html',
                     {
                         "wrongpass":password,
-                        "sql_error":sql_query
+                        "sql_error":"No matching user found"
                     })
         else:
             return render(request, 'Lab_2021/A3_Injection/sql_lab.html')
