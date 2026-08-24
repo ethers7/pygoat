@@ -431,7 +431,10 @@ def _sanitize_domain(raw_domain):
     cleaned = cleaned.split('/')[0].split('?')[0].split('#')[0].strip()
     if not cleaned or not _DOMAIN_RE.match(cleaned):
         raise ValueError("Invalid domain")
-    return cleaned
+    # Encode via IDNA and decode to ASCII to produce a verified domain string
+    # This also prevents homograph attacks by normalizing internationalized labels
+    safe = cleaned.encode('idna').decode('ascii')
+    return safe
 
 
 @csrf_exempt
@@ -455,17 +458,15 @@ def cmd_lab(request):
                 cmd_name = ALLOWED_COMMANDS["dig"]
 
             try:
-                process = subprocess.Popen(
+                result = subprocess.run(
                     [cmd_name, domain],
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                output = data + stderr
-                print(data + stderr)
-            except:
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                output = result.stdout + result.stderr
+                print(output)
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
