@@ -18,7 +18,8 @@ from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
 from random import randint
-from defusedxml.pulldom import START_ELEMENT, parseString
+from defusedxml.pulldom import parseString
+from xml.dom.pulldom import START_ELEMENT
 
 import jwt
 import requests
