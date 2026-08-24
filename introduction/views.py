@@ -1,14 +1,17 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
-import pickle
 import random
 import re
+import socket
 import string
+import shlex
 import subprocess
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
@@ -199,8 +202,8 @@ def insec_des(request):
 @dataclass
 class TestUser:
     admin: int = 0
-pickled_user = pickle.dumps(TestUser())
-encoded_user = base64.b64encode(pickled_user)
+serialized_user = json.dumps({"admin": 0}).encode()
+encoded_user = base64.b64encode(serialized_user)
 
 def insec_des_lab(request):
     if request.user.is_authenticated:
@@ -211,7 +214,8 @@ def insec_des_lab(request):
             response.set_cookie(key='token',value=token.decode('utf-8'))
         else:
             token = base64.b64decode(token)
-            admin = pickle.loads(token)
+            data = json.loads(token)
+            admin = TestUser(admin=int(data.get("admin", 0)))
             if admin.admin == 1:
                 response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Welcome Admin, SECRETKEY:ADMIN123"})
                 return response
@@ -418,20 +422,28 @@ def cmd_lab(request):
             domain=request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            os=request.POST.get('os')
-            print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
-            else:
-                command = "dig {}".format(domain)
-            
+            # Validate domain: reject shell metacharacters and path separators
+            if not re.match(r'^[a-zA-Z0-9._-]+$', domain):
+                output = "Invalid domain name"
+                return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
+
+            os_param = request.POST.get('os')
+            print(os_param)
+            safe_domain = shlex.escape(domain)
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
-                process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
-                    stderr=subprocess.PIPE)
+                if os_param == 'win':
+                    process = subprocess.Popen(
+                        ['nslookup', safe_domain],
+                        shell=False,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE)
+                else:
+                    process = subprocess.Popen(
+                        ['dig', safe_domain],
+                        shell=False,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
                 data = stdout.decode('utf-8')
                 stderr = stderr.decode('utf-8')
@@ -959,11 +971,66 @@ def ssrf_lab2(request):
 
     elif request.method == "POST":
         url = request.POST["url"]
+
+        # Validate URL to prevent SSRF
         try:
-            response = requests.get(url)
-            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+            parsed = urllib.parse.urlparse(url)
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+
+        # Allow only http and https schemes
+        if parsed.scheme not in ("http", "https"):
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL scheme"})
+
+        hostname = parsed.hostname
+        if not hostname:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+
+        # Resolve hostname and block private/internal IP ranges
+        try:
+            resolved_ips = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        except socket.gaierror:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Could not resolve hostname"})
+
+        if not resolved_ips:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Could not resolve hostname"})
+
+        for result in resolved_ips:
+            ip = ipaddress.ip_address(result[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Requests to internal addresses are not allowed"})
+
+        # Use the resolved IP directly to prevent DNS rebinding (TOCTOU)
+        resolved_ip = resolved_ips[0][4][0]
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        # Rebuild the URL using the resolved IP to avoid a second DNS lookup
+        safe_url = urllib.parse.urlunparse((
+            parsed.scheme,
+            f"{resolved_ip}:{port}",
+            parsed.path or "/",
+            parsed.params,
+            parsed.query,
+            parsed.fragment,
+        ))
+
+        try:
+            response = requests.get(
+                safe_url,
+                headers={"Host": hostname},
+                timeout=5,
+                allow_redirects=False,
+                verify=parsed.scheme == "https",
+                stream=True,
+            )
+            # Limit response size to 1MB to prevent resource exhaustion
+            max_size = 1024 * 1024
+            content = response.raw.read(max_size + 1)
+            if len(content) > max_size:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Response too large"})
+            # Return only the status code and limited text content, not raw response
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": content.decode(errors="replace")[:max_size]})
+        except requests.exceptions.RequestException:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Request failed"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
 def ssti(request):
