@@ -8,7 +8,6 @@ import os
 import pickle
 import random
 import re
-import shlex
 import socket
 import string
 import subprocess
@@ -410,6 +409,20 @@ def error(request):
 
 #******************************************************  Command Injection  ***********************************************************************#
 
+_DNS_ALLOWED_COMMANDS = {'win': 'nslookup', 'linux': 'dig'}
+_DOMAIN_PATTERN = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?$')
+
+
+def _run_dns_lookup(command, target):
+    result = subprocess.run(
+        [command, target],
+        shell=False,
+        capture_output=True,
+        timeout=30,
+        check=False)
+    return result.stdout.decode('utf-8') + result.stderr.decode('utf-8')
+
+
 def cmd(request):
     if request.user.is_authenticated:
         return render(request,'Lab/CMD/cmd.html')
@@ -420,38 +433,24 @@ def cmd_lab(request):
     if request.user.is_authenticated:
         if(request.method=="POST"):
             domain=request.POST.get('domain')
-            # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
 
-            # Validate domain: only allow safe characters (alphanumeric, hyphens, dots)
-            if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?$', domain) or '..' in domain:
+            if not _DOMAIN_PATTERN.match(domain) or '..' in domain:
                 output = "Invalid domain name"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
-            # Allowlist of permitted commands
-            allowed_commands = {'win': 'nslookup', 'linux': 'dig'}
             os_choice = request.POST.get('os')
-            cmd_name = allowed_commands.get(os_choice)
+            cmd_name = _DNS_ALLOWED_COMMANDS.get(os_choice)
             if cmd_name is None:
                 output = "Invalid OS selection"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
             try:
-                validated_domain = shlex.quote(domain)
-                result = subprocess.run(
-                    [cmd_name, validated_domain],
-                    shell=False,
-                    capture_output=True,
-                    timeout=30,
-                    check=False)
-                data = result.stdout.decode('utf-8')
-                stderr_output = result.stderr.decode('utf-8')
-                output = data + stderr_output
+                output = _run_dns_lookup(cmd_name, domain)
                 print(output)
             except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
-            print(output)
             return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
         else:
             return render(request, 'Lab/CMD/cmd_lab.html')
