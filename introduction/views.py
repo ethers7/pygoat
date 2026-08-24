@@ -11,7 +11,6 @@ import re
 import shlex
 import socket
 import string
-import subprocess
 import urllib.parse
 import uuid
 from dataclasses import dataclass
@@ -445,33 +444,14 @@ def cmd_lab(request):
             if not domain or not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?$', domain):
                 output = "Invalid domain name"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
-            # Allowlist of permitted commands keyed by OS parameter
-            ALLOWED_COMMANDS = {
-                'win': 'nslookup',
-                'linux': 'dig',
-            }
-            os=request.POST.get('os')
-            print(os)
-            cmd_binary = ALLOWED_COMMANDS.get(os)
-            if cmd_binary is None:
-                output = "Invalid OS selection"
-                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
-
-            # Assign validated domain to a new variable after all checks pass
+            # Use Python's built-in DNS resolution instead of subprocess
             validated_domain = str(domain)
             try:
-                result = subprocess.run(
-                    [cmd_binary, validated_domain],
-                    shell=False,
-                    capture_output=True,
-                    text=True,
-                    check=False)
-                output = result.stdout + result.stderr
-                print(output)
-            except:
-                output = "Something went wrong"
-                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
-            print(output)
+                addr_info = socket.getaddrinfo(validated_domain, None)
+                addresses = sorted(set(addr[4][0] for addr in addr_info))
+                output = f"DNS lookup for {validated_domain}:\n" + "\n".join(addresses)
+            except socket.gaierror as e:
+                output = f"DNS resolution failed: {e}"
             return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
         else:
             return render(request, 'Lab/CMD/cmd_lab.html')
