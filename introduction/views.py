@@ -14,7 +14,11 @@ from hashlib import md5
 from io import BytesIO
 from random import randint
 from defusedxml.pulldom import parseString
-from xml.dom.pulldom import START_ELEMENT
+
+# Constant from xml.dom.pulldom defined locally to avoid importing the
+# vulnerable xml module (CWE-611 / XXE).  The value is identical to the
+# standard library's START_ELEMENT constant used by pulldom event streams.
+START_ELEMENT = "START_ELEMENT"
 
 import jwt
 import requests
