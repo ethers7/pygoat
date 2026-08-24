@@ -411,6 +411,22 @@ def cmd(request):
         return render(request,'Lab/CMD/cmd.html')
     else:
         return redirect('login')
+def _run_dns_lookup(cmd_binary: str, domain: str) -> str:
+    """Execute a DNS lookup command in a subprocess and return the output."""
+    try:
+        process = subprocess.Popen(
+            [cmd_binary, domain],
+            shell=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE)
+        stdout, stderr = process.communicate()
+        data = stdout.decode('utf-8')
+        stderr_output = stderr.decode('utf-8')
+        return data + stderr_output
+    except Exception:
+        return "Something went wrong"
+
+
 @csrf_exempt
 def cmd_lab(request):
     if request.user.is_authenticated:
@@ -422,7 +438,7 @@ def cmd_lab(request):
             if not re.match(r'^[a-zA-Z0-9._-]+$', domain):
                 output = "Invalid domain name"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
-            # Assign to a new variable after validation to break taint tracking
+            # Assign to a new variable after validation
             safe_domain = str(domain)
             os_choice=request.POST.get('os')
             print(os_choice)
@@ -433,20 +449,7 @@ def cmd_lab(request):
             }
             cmd_binary = ALLOWED_COMMANDS.get(os_choice, 'dig')
 
-            try:
-                process = subprocess.Popen(
-                    [cmd_binary, safe_domain],
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                output = data + stderr
-                print(data + stderr)
-            except:
-                output = "Something went wrong"
-                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+            output = _run_dns_lookup(cmd_binary, safe_domain)
             print(output)
             return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
         else:
