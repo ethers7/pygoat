@@ -418,19 +418,28 @@ def cmd_lab(request):
             domain=request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
+            # Validate domain contains only safe characters (alphanumeric, hyphens, dots)
+            if not re.match(r'^[a-zA-Z0-9._-]+$', domain):
+                output = "Invalid domain"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             os=request.POST.get('os')
             print(os)
+            # Allowlist of permitted commands for DNS lookup
+            ALLOWED_COMMANDS = {"nslookup", "dig"}
             if(os=='win'):
-                command="nslookup {}".format(domain)
+                cmd_name = "nslookup"
             else:
-                command = "dig {}".format(domain)
-            
+                cmd_name = "dig"
+            if cmd_name not in ALLOWED_COMMANDS:
+                output = "Command not allowed"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+            cmd_args = [cmd_name, domain]
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
                 process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
+                    cmd_args,
+                    shell=False,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
                 data = stdout.decode('utf-8')
