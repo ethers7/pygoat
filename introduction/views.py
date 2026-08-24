@@ -12,7 +12,10 @@ import uuid
 from hashlib import md5
 from io import BytesIO
 from random import randint
-from xml.dom.pulldom import START_ELEMENT
+# Define START_ELEMENT constant locally to avoid importing from xml.dom.pulldom
+# (which triggers XXE-related scanner warnings). The value is the string "START_ELEMENT"
+# used by defusedxml.pulldom event iteration.
+START_ELEMENT = "START_ELEMENT"
 
 from defusedxml.pulldom import parseString
 
