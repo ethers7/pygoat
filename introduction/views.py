@@ -1,15 +1,18 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import pickle
 import random
 import re
+import socket
 import string
 import subprocess
 import uuid
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
@@ -418,19 +421,29 @@ def cmd_lab(request):
             domain=request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            os=request.POST.get('os')
-            print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
+            # Validate domain: only allow valid hostname/IP characters, reject
+            # argument injection (leading dash) and shell metacharacters.
+            if not domain or not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9.\-:]*[a-zA-Z0-9])?$', domain):
+                output = "Invalid domain"
+                return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
+
+            ALLOWED_COMMANDS = {"nslookup", "dig"}
+            os_param = request.POST.get('os')
+            print(os_param)
+            if os_param == 'win':
+                cmd_name = "nslookup"
             else:
-                command = "dig {}".format(domain)
-            
+                cmd_name = "dig"
+
+            if cmd_name not in ALLOWED_COMMANDS:
+                output = "Invalid command"
+                return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
                 process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
+                    [cmd_name, domain],
+                    shell=False,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
                 data = stdout.decode('utf-8')
@@ -960,9 +973,22 @@ def ssrf_lab2(request):
     elif request.method == "POST":
         url = request.POST["url"]
         try:
-            response = requests.get(url)
+            parsed = urlparse(url)
+            if parsed.scheme not in ("http", "https"):
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL scheme"})
+            hostname = parsed.hostname
+            if not hostname:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+            resolved_ip = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            for family, stype, proto, canonname, sockaddr in resolved_ip:
+                ip = ipaddress.ip_address(sockaddr[0])
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                    return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "URL points to a blocked address"})
+            response = requests.get(url, allow_redirects=False, timeout=10)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+        except (socket.gaierror, ValueError):
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+        except requests.RequestException:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
