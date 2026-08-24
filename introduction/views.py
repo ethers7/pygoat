@@ -432,7 +432,7 @@ def cmd_lab(request):
             }
             cmd_key = 'win' if os_choice == 'win' else 'linux'
             cmd_name = ALLOWED_COMMANDS[cmd_key]
-            command = [cmd_name, domain]
+            command = [cmd_name, shlex.quote(domain)]
 
             try:
                 process = subprocess.Popen(
