@@ -159,7 +159,7 @@ def sql_lab(request):
                 print(sql_query)
                 try:
                     print("\nin try\n")
-                    val=login.objects.raw(sql_query, [name, password])
+                    val=login.objects.raw("SELECT * FROM introduction_login WHERE user=%s AND password=%s", [name, password])
                 except:
                     print("\nin except\n")
                     return render(
@@ -875,7 +875,7 @@ def injection_sql_lab(request):
             print(sql_query)
 
             try:
-                user = sql_lab_table.objects.raw(sql_query, [name, password])
+                user = sql_lab_table.objects.raw("SELECT * FROM introduction_sql_lab_table WHERE id=%s AND password=%s", [name, password])
                 user = user[0].id
                 print(user)
 
