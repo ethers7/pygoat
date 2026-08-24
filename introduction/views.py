@@ -439,9 +439,6 @@ def _sanitize_domain(raw_domain):
 
 @csrf_exempt
 def cmd_lab(request):
-    # Allowlist of permitted DNS lookup commands
-    ALLOWED_COMMANDS = {"nslookup": "nslookup", "dig": "dig"}
-
     if request.user.is_authenticated:
         if(request.method=="POST"):
             try:
@@ -450,26 +447,25 @@ def cmd_lab(request):
                 output = "Invalid domain name"
                 return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
 
-            os_choice = request.POST.get('os')
-            print(os_choice)
-            if os_choice == 'win':
-                cmd_name = ALLOWED_COMMANDS["nslookup"]
-            else:
-                cmd_name = ALLOWED_COMMANDS["dig"]
-
             try:
-                result = subprocess.run(
-                    [cmd_name, domain],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                output = result.stdout + result.stderr
-                print(output)
+                import socket as _socket
+                results = _socket.getaddrinfo(domain, None)
+                lines = []
+                seen = set()
+                for family, kind, proto, canonname, sockaddr in results:
+                    addr = sockaddr[0]
+                    if addr not in seen:
+                        seen.add(addr)
+                        family_name = "IPv6" if family == _socket.AF_INET6 else "IPv4"
+                        lines.append(f"{domain} -> {addr} ({family_name})")
+                if canonname:
+                    lines.insert(0, f"Canonical name: {canonname}")
+                output = "\n".join(lines) if lines else f"No DNS records found for {domain}"
+            except _socket.gaierror as e:
+                output = f"DNS lookup failed for {domain}: {e}"
             except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
-            print(output)
             return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
         else:
             return render(request, 'Lab/CMD/cmd_lab.html')
