@@ -14,7 +14,7 @@ import string
 import subprocess
 import uuid
 import urllib.parse
-from hashlib import md5
+from django.contrib.auth.hashers import check_password, make_password
 from io import BytesIO
 from random import randint
 from xml.dom.pulldom import START_ELEMENT
@@ -1048,8 +1048,11 @@ def crypto_failure_lab(request):
             username = request.POST["username"]
             password = request.POST["password"]
             try:
-                password = md5(password.encode()).hexdigest()
-                user = CF_user.objects.filter(username=username,password=password).first()
+                user = CF_user.objects.filter(username=username).first()
+                if user and check_password(password, user.password):
+                    pass
+                else:
+                    user = None
                 return render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab.html",{"user":user, "success":True,"failure":False})
             except Exception as e:
                 return render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab.html",{"success":False, "failure":True})
