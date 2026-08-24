@@ -7,6 +7,7 @@ import os
 import pickle
 import random
 import re
+import shlex
 import string
 import subprocess
 import uuid
@@ -433,7 +434,7 @@ def cmd_lab(request):
             os_type=request.POST.get('os')
             print(os_type)
             cmd_key = 'win' if os_type == 'win' else 'linux'
-            cmd_args = [ALLOWED_COMMANDS[cmd_key], domain]
+            cmd_args = [ALLOWED_COMMANDS[cmd_key], shlex.quote(domain)]
 
             try:
                 process = subprocess.Popen(
