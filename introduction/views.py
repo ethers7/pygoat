@@ -415,7 +415,10 @@ def cmd(request):
 def cmd_lab(request):
     if request.user.is_authenticated:
         if(request.method=="POST"):
-            domain=request.POST.get('domain')
+            domain = request.POST.get('domain', '')
+            if not domain or not isinstance(domain, str):
+                output = "Invalid domain name"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
             # Validate domain: only allow alphanumeric, hyphens, dots (valid domain chars)
@@ -430,20 +433,25 @@ def cmd_lab(request):
                 'linux': ['dig'],
             }
             cmd_key = 'win' if os_type == 'win' else 'linux'
-            cmd_args = ALLOWED_COMMANDS[cmd_key] + [domain]
+            allowed_cmd = ALLOWED_COMMANDS[cmd_key][0]
+            validated_domain = str(domain)
+            cmd_args = [allowed_cmd, validated_domain]
 
             try:
-                process = subprocess.Popen(
+                result = subprocess.run(
                     cmd_args,
                     shell=False,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                output = data + stderr
-                print(data + stderr)
-            except:
+                    stderr=subprocess.PIPE,
+                    timeout=30)
+                data = result.stdout.decode('utf-8')
+                stderr_output = result.stderr.decode('utf-8')
+                output = data + stderr_output
+                print(data + stderr_output)
+            except subprocess.TimeoutExpired:
+                output = "Command timed out"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
