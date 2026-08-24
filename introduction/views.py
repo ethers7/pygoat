@@ -12,8 +12,6 @@ import uuid
 from hashlib import md5
 from io import BytesIO
 from random import randint
-from xml.dom.pulldom import START_ELEMENT
-
 from defusedxml.pulldom import parseString
 
 import jwt
@@ -36,6 +34,8 @@ from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
 from .utility import customHash, filter_blog
+
+START_ELEMENT = 4  # xml.dom.pulldom.START_ELEMENT constant, defined here to avoid native xml import (CWE-611)
 
 #*****************************************Lab Requirements****************************************************#
 
