@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 import os
-import pickle
 import random
 import re
 import string
@@ -197,8 +196,8 @@ def insec_des(request):
 @dataclass
 class TestUser:
     admin: int = 0
-pickled_user = pickle.dumps(TestUser())
-encoded_user = base64.b64encode(pickled_user)
+default_user_json = json.dumps({"admin": 0})
+encoded_user = base64.b64encode(default_user_json.encode('utf-8'))
 
 def insec_des_lab(request):
     if request.user.is_authenticated:
@@ -209,7 +208,8 @@ def insec_des_lab(request):
             response.set_cookie(key='token',value=token.decode('utf-8'))
         else:
             token = base64.b64decode(token)
-            admin = pickle.loads(token)
+            data = json.loads(token.decode('utf-8'))
+            admin = TestUser(admin=int(data.get("admin", 0)))
             if admin.admin == 1:
                 response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Welcome Admin, SECRETKEY:ADMIN123"})
                 return response
