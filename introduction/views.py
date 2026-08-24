@@ -1,15 +1,18 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import random
 import re
 import shlex
+import socket
 import string
 import subprocess
 import uuid
+import urllib.parse
 from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
@@ -956,10 +959,35 @@ def ssrf_lab2(request):
 
     elif request.method == "POST":
         url = request.POST["url"]
+
+        # Validate URL to prevent SSRF
+        try:
+            parsed = urllib.parse.urlparse(url)
+        except Exception:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+
+        # Only allow http and https schemes
+        if parsed.scheme not in ("http", "https"):
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL scheme. Only http and https are allowed."})
+
+        hostname = parsed.hostname
+        if not hostname:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL: no hostname provided."})
+
+        # Resolve hostname and check if the IP is private/internal
+        try:
+            resolved_ip = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)[0][4][0]
+            ip_obj = ipaddress.ip_address(resolved_ip)
+        except (socket.gaierror, ValueError):
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL: unable to resolve hostname."})
+
+        if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_reserved:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Access to internal or private network addresses is not allowed."})
+
         try:
             response = requests.get(url)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
