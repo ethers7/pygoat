@@ -8,6 +8,7 @@ import pickle
 import random
 import re
 import string
+import shlex
 import subprocess
 import uuid
 from dataclasses import dataclass
@@ -440,7 +441,8 @@ def cmd_lab(request):
                 return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
 
             # Build command as a list (argv) to avoid shell injection
-            cmd_parts = [cmd_name, domain]
+            # Apply shlex.escape() for defense-in-depth on user-supplied domain
+            cmd_parts = [cmd_name, shlex.escape(domain)]
 
             try:
                 process = subprocess.Popen(
