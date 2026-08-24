@@ -1,15 +1,18 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import pickle
 import random
 import re
+import socket
 import string
 import subprocess
 import uuid
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
@@ -411,38 +414,58 @@ def cmd(request):
         return render(request,'Lab/CMD/cmd.html')
     else:
         return redirect('login')
+# Valid domain characters: alphanumeric, hyphens, dots (no shell metacharacters)
+_DOMAIN_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9.\-]{0,253}[a-zA-Z0-9]$')
+
+
+def _sanitize_domain(raw_domain):
+    """Validate and sanitize a raw domain string for safe use in subprocess args.
+
+    Returns the sanitized domain string. Raises ValueError if invalid.
+    """
+    if not raw_domain:
+        raise ValueError("Empty domain")
+    # Remove all common protocols (case-insensitive) and www prefix
+    cleaned = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', raw_domain, flags=re.IGNORECASE)
+    # Strip any trailing path/query from the domain
+    cleaned = cleaned.split('/')[0].split('?')[0].split('#')[0].strip()
+    if not cleaned or not _DOMAIN_RE.match(cleaned):
+        raise ValueError("Invalid domain")
+    # Encode via IDNA and decode to ASCII to produce a verified domain string
+    # This also prevents homograph attacks by normalizing internationalized labels
+    safe = cleaned.encode('idna').decode('ascii')
+    return safe
+
+
 @csrf_exempt
 def cmd_lab(request):
     if request.user.is_authenticated:
         if(request.method=="POST"):
-            domain=request.POST.get('domain')
-            # Remove all common protocols (case-insensitive) and www prefix
-            domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            os=request.POST.get('os')
-            print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
-            else:
-                command = "dig {}".format(domain)
-            
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
-                process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
-                output = data + stderr
-                print(data + stderr)
-            except:
+                domain = _sanitize_domain(request.POST.get('domain', ''))
+            except ValueError:
+                output = "Invalid domain name"
+                return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
+
+            try:
+                import socket as _socket
+                results = _socket.getaddrinfo(domain, None)
+                lines = []
+                seen = set()
+                for family, kind, proto, canonname, sockaddr in results:
+                    addr = sockaddr[0]
+                    if addr not in seen:
+                        seen.add(addr)
+                        family_name = "IPv6" if family == _socket.AF_INET6 else "IPv4"
+                        lines.append(f"{domain} -> {addr} ({family_name})")
+                if canonname:
+                    lines.insert(0, f"Canonical name: {canonname}")
+                output = "\n".join(lines) if lines else f"No DNS records found for {domain}"
+            except _socket.gaierror as e:
+                output = f"DNS lookup failed for {domain}: {e}"
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
-            print(output)
             return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
         else:
             return render(request, 'Lab/CMD/cmd_lab.html')
@@ -960,9 +983,31 @@ def ssrf_lab2(request):
     elif request.method == "POST":
         url = request.POST["url"]
         try:
-            response = requests.get(url)
+            parsed = urlparse(url)
+            # Allowlist schemes
+            if parsed.scheme not in ("http", "https"):
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL scheme"})
+            hostname = parsed.hostname
+            if not hostname:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+            # Resolve hostname and validate the IP to prevent SSRF / DNS rebinding
+            resolved_ip = socket.getaddrinfo(hostname, None, socket.AF_INET)[0][4][0]
+            ip_obj = ipaddress.ip_address(resolved_ip)
+            if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_reserved:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Access denied"})
+            # Build the URL using the resolved IP to prevent TOCTOU / DNS rebinding
+            port_part = ":" + str(parsed.port) if parsed.port else ""
+            safe_url = "{}://{}{}{}".format(
+                parsed.scheme, resolved_ip, port_part, parsed.path or "/"
+            )
+            if parsed.query:
+                safe_url += "?" + parsed.query
+            headers = {"Host": hostname}
+            response = requests.get(safe_url, headers=headers, allow_redirects=False, timeout=5)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+        except (socket.gaierror, ValueError):
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
