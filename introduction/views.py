@@ -999,7 +999,7 @@ def ssrf_lab2(request):
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 
         try:
-            response = requests.get(url)
+            response = requests.get(url, timeout=10)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
         except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
