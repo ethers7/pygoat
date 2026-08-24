@@ -7,9 +7,8 @@ import os
 import pickle
 import random
 import re
-import shlex
+import socket
 import string
-import subprocess
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
@@ -414,8 +413,6 @@ def cmd(request):
         return redirect('login')
 @csrf_exempt
 def cmd_lab(request):
-    # Allowlist of permitted commands for DNS lookup
-    ALLOWED_COMMANDS = {'win': 'nslookup', 'linux': 'dig'}
     # Strict domain validation: labels with alphanumeric/hyphens, TLD alpha 2-63 chars
     DOMAIN_RE = re.compile(
         r'^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$'
@@ -434,30 +431,23 @@ def cmd_lab(request):
                 output = "Invalid domain name"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
-            os_choice = request.POST.get('os', '')
-            print(os_choice)
-
-            # Select command from allowlist only
-            if os_choice == 'win':
-                cmd_name = ALLOWED_COMMANDS['win']
-            else:
-                cmd_name = ALLOWED_COMMANDS['linux']
-
-            # Use shlex.quote as defense-in-depth (shell=False already prevents shell injection)
-            safe_domain = shlex.quote(domain)
-
             try:
-                process = subprocess.Popen(
-                    [cmd_name, safe_domain],
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                output = data + stderr
-                print(data + stderr)
-            except:
+                results = socket.getaddrinfo(domain, None)
+                # Format results similar to nslookup/dig output
+                seen = set()
+                lines = ["DNS lookup results for: " + domain, ""]
+                for family, socktype, proto, canonname, sockaddr in results:
+                    addr = sockaddr[0]
+                    if addr not in seen:
+                        seen.add(addr)
+                        family_name = "IPv6" if family == socket.AF_INET6 else "IPv4"
+                        lines.append(f"Address: {addr} ({family_name})")
+                if canonname:
+                    lines.append(f"Canonical name: {canonname}")
+                output = "\n".join(lines)
+            except socket.gaierror as e:
+                output = f"DNS lookup failed: {e}"
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
