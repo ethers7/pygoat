@@ -1,14 +1,17 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import random
 import re
+import socket
 import string
 import shlex
 import subprocess
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
@@ -968,11 +971,66 @@ def ssrf_lab2(request):
 
     elif request.method == "POST":
         url = request.POST["url"]
+
+        # Validate URL to prevent SSRF
         try:
-            response = requests.get(url)
-            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+            parsed = urllib.parse.urlparse(url)
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+
+        # Allow only http and https schemes
+        if parsed.scheme not in ("http", "https"):
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL scheme"})
+
+        hostname = parsed.hostname
+        if not hostname:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+
+        # Resolve hostname and block private/internal IP ranges
+        try:
+            resolved_ips = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        except socket.gaierror:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Could not resolve hostname"})
+
+        if not resolved_ips:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Could not resolve hostname"})
+
+        for result in resolved_ips:
+            ip = ipaddress.ip_address(result[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Requests to internal addresses are not allowed"})
+
+        # Use the resolved IP directly to prevent DNS rebinding (TOCTOU)
+        resolved_ip = resolved_ips[0][4][0]
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        # Rebuild the URL using the resolved IP to avoid a second DNS lookup
+        safe_url = urllib.parse.urlunparse((
+            parsed.scheme,
+            f"{resolved_ip}:{port}",
+            parsed.path or "/",
+            parsed.params,
+            parsed.query,
+            parsed.fragment,
+        ))
+
+        try:
+            response = requests.get(
+                safe_url,
+                headers={"Host": hostname},
+                timeout=5,
+                allow_redirects=False,
+                verify=parsed.scheme == "https",
+                stream=True,
+            )
+            # Limit response size to 1MB to prevent resource exhaustion
+            max_size = 1024 * 1024
+            content = response.raw.read(max_size + 1)
+            if len(content) > max_size:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Response too large"})
+            # Return only the status code and limited text content, not raw response
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": content.decode(errors="replace")[:max_size]})
+        except requests.exceptions.RequestException:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Request failed"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
 def ssti(request):
