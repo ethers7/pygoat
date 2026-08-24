@@ -9,6 +9,7 @@ import random
 import re
 import socket
 import string
+import shlex
 import subprocess
 import urllib.parse
 import uuid
@@ -158,12 +159,11 @@ def sql_lab(request):
 
             if login.objects.filter(user=name):
 
-                sql_query = "SELECT * FROM introduction_login WHERE user=%s AND password=%s"
-                params = [name, password]
+                sql_query = "SELECT * FROM introduction_login WHERE user=? AND password=?"
                 print(sql_query)
                 try:
                     print("\nin try\n")
-                    val=login.objects.raw(sql_query, params)
+                    val = login.objects.filter(user=name, password=password)
                 except:
                     print("\nin except\n")
                     return render(
@@ -428,8 +428,8 @@ def cmd_lab(request):
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
 
-            # Validate domain: only allow valid hostname characters
-            if not domain or not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?$', domain):
+            # Validate domain: only allow valid hostname characters and enforce DNS max length
+            if not domain or len(domain) > 253 or not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?$', domain):
                 output = "Invalid domain name"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
@@ -443,7 +443,7 @@ def cmd_lab(request):
 
             try:
                 process = subprocess.Popen(
-                    [cmd_name, domain],
+                    [cmd_name, shlex.quote(domain)],
                     shell=False,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
