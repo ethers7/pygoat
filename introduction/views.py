@@ -1,12 +1,14 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import pickle
 import random
 import re
+import socket
 import string
 import subprocess
 import uuid
@@ -952,6 +954,37 @@ def ssrf_target(request):
     else:
         return render(request,"Lab/ssrf/ssrf_target.html",{"access_denied":True})
 
+def _is_safe_url(url):
+    """Validate that a URL is safe for server-side requests (SSRF prevention).
+
+    Checks:
+    - Scheme must be http or https
+    - Hostname must resolve to a public (non-private) IP address
+    """
+    from urllib.parse import urlparse
+
+    ALLOWED_SCHEMES = {"http", "https"}
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ALLOWED_SCHEMES:
+        return False
+    hostname = parsed.hostname
+    if not hostname:
+        return False
+
+    try:
+        addrinfos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except socket.gaierror:
+        return False
+
+    for family, _, _, _, sockaddr in addrinfos:
+        ip = ipaddress.ip_address(sockaddr[0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            return False
+
+    return True
+
+
 @authentication_decorator
 def ssrf_lab2(request):
     if request.method == "GET":
@@ -959,10 +992,16 @@ def ssrf_lab2(request):
 
     elif request.method == "POST":
         url = request.POST["url"]
+        if not _is_safe_url(url):
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "URL not allowed"})
         try:
-            response = requests.get(url)
-            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+            response = requests.get(url, timeout=5)
+            return render(
+                request,
+                "Lab/ssrf/ssrf_lab2.html",
+                {"response": "Status: " + str(response.status_code)},
+            )
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
