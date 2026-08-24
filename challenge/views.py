@@ -1,8 +1,11 @@
+import re
+import subprocess
+
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.views.generic import View
 from django.views.decorators.csrf import csrf_exempt
-import subprocess
+
 from .utility import get_free_port
 from .models import Challenge, UserChallenge
 # Create your views here.
@@ -77,8 +80,15 @@ class DoItFast(View):
 
         user_chal.is_live = False
         user_chal.save()
-        command = f"docker stop {user_chal.container_id}"
-        process = subprocess.Popen(command.split(" "), stdout=subprocess.PIPE)
+        container_id = user_chal.container_id
+        # Validate container_id is a valid Docker container ID (hex string)
+        if not re.match(r'^[a-f0-9]+$', container_id):
+            return JsonResponse({'message': 'invalid container id', 'status': '400'})
+        process = subprocess.Popen(
+            ["docker", "stop", container_id],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
         output, error = process.communicate()
         return JsonResponse({'message': 'success', 'status': '200'})
     
