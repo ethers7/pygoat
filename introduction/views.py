@@ -12,7 +12,7 @@ import socket
 import string
 import subprocess
 import uuid
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
@@ -999,7 +999,9 @@ def ssrf_lab2(request):
         if not _is_safe_url(url):
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "URL not allowed"})
         try:
-            response = requests.get(url)
+            parsed = urlparse(url)
+            validated_url = urlunparse(parsed)
+            response = requests.get(validated_url)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
         except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
