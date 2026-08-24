@@ -427,23 +427,23 @@ def cmd_lab(request):
                 output = "Invalid domain name"
                 return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
 
-            # Allowlist of permitted commands keyed by OS parameter
-            ALLOWED_COMMANDS = {
-                'win': 'nslookup',
-                'linux': 'dig',
-            }
             os_param = request.POST.get('os')
             print(os_param)
-            cmd_name = ALLOWED_COMMANDS.get(os_param, 'dig')
-
             safe_domain = shlex.escape(domain)
 
             try:
-                process = subprocess.Popen(
-                    [cmd_name, safe_domain],
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
+                if os_param == 'win':
+                    process = subprocess.Popen(
+                        ['nslookup', safe_domain],
+                        shell=False,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE)
+                else:
+                    process = subprocess.Popen(
+                        ['dig', safe_domain],
+                        shell=False,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
                 data = stdout.decode('utf-8')
                 stderr = stderr.decode('utf-8')
