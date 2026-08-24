@@ -8,6 +8,7 @@ import pickle
 import random
 import re
 import string
+import shlex
 import subprocess
 import uuid
 from dataclasses import dataclass
@@ -432,9 +433,11 @@ def cmd_lab(request):
             print(os_param)
             cmd_name = ALLOWED_COMMANDS.get(os_param, 'dig')
 
+            safe_domain = shlex.escape(domain)
+
             try:
                 process = subprocess.Popen(
-                    [cmd_name, domain],
+                    [cmd_name, safe_domain],
                     shell=False,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
