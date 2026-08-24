@@ -413,30 +413,48 @@ def cmd(request):
         return redirect('login')
 @csrf_exempt
 def cmd_lab(request):
+    # Allowlist of permitted commands for DNS lookup
+    ALLOWED_COMMANDS = {
+        'win': '/usr/bin/nslookup',
+        'linux': '/usr/bin/dig',
+    }
+    # Strict hostname/IP validation: only alphanumeric, dots, hyphens, colons (IPv6)
+    VALID_DOMAIN_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9.\-:]{0,253}[a-zA-Z0-9]$')
+
     if request.user.is_authenticated:
         if(request.method=="POST"):
-            domain=request.POST.get('domain')
+            domain=request.POST.get('domain', '')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            os=request.POST.get('os')
-            print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
+            # Strip any trailing path/query components
+            domain = domain.split('/')[0].split('?')[0].split('#')[0].strip()
+
+            # Validate domain against strict pattern to prevent injection
+            if not domain or not VALID_DOMAIN_RE.match(domain):
+                output = "Invalid domain name. Only alphanumeric characters, dots, and hyphens are allowed."
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+
+            os_type=request.POST.get('os', '')
+            print(os_type)
+
+            # Use allowlist to select command; default to dig
+            if os_type == 'win':
+                cmd_key = 'win'
             else:
-                command = "dig {}".format(domain)
-            
+                cmd_key = 'linux'
+
+            cmd_path = ALLOWED_COMMANDS[cmd_key]
+            cmd_args = [cmd_path, domain]
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
                 process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
+                    cmd_args,
+                    shell=False,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
                 data = stdout.decode('utf-8')
                 stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
                 output = data + stderr
                 print(data + stderr)
             except:
