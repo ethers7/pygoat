@@ -33,6 +33,7 @@ from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
 from django.template import loader
 from django.template.loader import render_to_string
+from django.utils.html import escape
 from PIL import Image, ImageMath
 from requests.structures import CaseInsensitiveDict
 
@@ -1003,11 +1004,12 @@ def ssti_lab(request):
             id = str(uuid.uuid4()).split('-')[-1]
 
             blog = filter_blog(blog)
+            blog = escape(blog)
             prepend_code = "{% extends 'introduction/base.html' %}\
                 {% block content %}{% block title %}\
                 <title>SSTI-Blogs</title>\
                 {% endblock %}"
-            
+
             blog = prepend_code + blog + "{% endblock %}"
             new_blog = Blogs.objects.create(author = request.user, blog_id = id)
             new_blog.save() 
