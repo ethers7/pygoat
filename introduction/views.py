@@ -1,15 +1,18 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import pickle
 import random
 import re
+import socket
 import string
 import subprocess
 import uuid
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
@@ -955,6 +958,9 @@ def ssrf_target(request):
     else:
         return render(request,"Lab/ssrf/ssrf_target.html",{"access_denied":True})
 
+SSRF_ALLOWED_DOMAINS = ["example.com", "api.example.com"]
+
+
 @authentication_decorator
 def ssrf_lab2(request):
     if request.method == "GET":
@@ -963,9 +969,30 @@ def ssrf_lab2(request):
     elif request.method == "POST":
         url = request.POST["url"]
         try:
-            response = requests.get(url)
-            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+            parsed = urlparse(url)
+            if parsed.scheme not in ("http", "https"):
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL scheme"})
+
+            hostname = parsed.hostname
+            if not hostname:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+
+            if hostname not in SSRF_ALLOWED_DOMAINS:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Domain not allowed"})
+
+            resolved_ip = socket.getaddrinfo(hostname, None, socket.AF_INET)[0][4][0]
+            ip_obj = ipaddress.ip_address(resolved_ip)
+            if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_reserved:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Request to internal addresses is not allowed"})
+
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            safe_url = f"{parsed.scheme}://{resolved_ip}:{port}{parsed.path or '/'}"
+            if parsed.query:
+                safe_url += f"?{parsed.query}"
+
+            response = requests.get(safe_url, headers={"Host": hostname}, timeout=5, allow_redirects=False)
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": f"Status: {response.status_code}"})
+        except (socket.gaierror, requests.RequestException):
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
