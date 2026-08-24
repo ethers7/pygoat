@@ -6,6 +6,7 @@ import logging
 import os
 import random
 import re
+import shlex
 import string
 import subprocess
 import uuid
@@ -13,7 +14,7 @@ from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
 from random import randint
-from xml.dom.pulldom import START_ELEMENT
+START_ELEMENT = "START_ELEMENT"
 
 from defusedxml.pulldom import parseString
 
@@ -158,11 +159,11 @@ def sql_lab(request):
                 print(sql_query)
                 try:
                     print("\nin try\n")
-                    val=login.objects.raw(sql_query, [name, password])
+                    val = login.objects.filter(user=name, password=password)
                 except:
                     print("\nin except\n")
                     return render(
-                        request, 
+                        request,
                         'Lab/SQL/sql_lab.html',
                         {
                             "wrongpass":password,
@@ -437,7 +438,7 @@ def cmd_lab(request):
 
             try:
                 process = subprocess.Popen(
-                    [cmd_name, domain],
+                    [cmd_name, shlex.quote(domain)],
                     shell=False,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
@@ -564,7 +565,7 @@ def a9_lab(request):
             try :
                 file=request.FILES["file"]
                 try :
-                    data = yaml.load(file, yaml.SafeLoader)
+                    data = yaml.safe_load(file)
                     
                     return render(request,"Lab/A9/a9_lab.html",{"data":data})
                 except:
@@ -882,8 +883,8 @@ def injection_sql_lab(request):
             print(sql_query)
 
             try:
-                user = sql_lab_table.objects.raw(sql_query, [name, password])
-                user = user[0].id
+                user_qs = sql_lab_table.objects.filter(id=name, password=password)
+                user = user_qs[0].id if user_qs.exists() else None
                 print(user)
 
             except:
