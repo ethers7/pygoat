@@ -1,15 +1,18 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import pickle
 import random
 import re
+import socket
 import string
 import subprocess
 import uuid
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
@@ -970,9 +973,31 @@ def ssrf_lab2(request):
     elif request.method == "POST":
         url = request.POST["url"]
         try:
-            response = requests.get(url)
+            parsed = urlparse(url)
+            # Allowlist schemes
+            if parsed.scheme not in ("http", "https"):
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL scheme"})
+            hostname = parsed.hostname
+            if not hostname:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+            # Resolve hostname and validate the IP to prevent SSRF / DNS rebinding
+            resolved_ip = socket.getaddrinfo(hostname, None, socket.AF_INET)[0][4][0]
+            ip_obj = ipaddress.ip_address(resolved_ip)
+            if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_reserved:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Access denied"})
+            # Build the URL using the resolved IP to prevent TOCTOU / DNS rebinding
+            port_part = ":" + str(parsed.port) if parsed.port else ""
+            safe_url = "{}://{}{}{}".format(
+                parsed.scheme, resolved_ip, port_part, parsed.path or "/"
+            )
+            if parsed.query:
+                safe_url += "?" + parsed.query
+            headers = {"Host": hostname}
+            response = requests.get(safe_url, headers=headers, allow_redirects=False, timeout=5)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+        except (socket.gaierror, ValueError):
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
