@@ -422,10 +422,12 @@ def cmd_lab(request):
             domain=request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            # Validate domain: only allow characters valid in domain names
-            if not re.match(r'^[a-zA-Z0-9._-]+$', domain):
+            # Validate and sanitize domain: only allow characters valid in domain names
+            match = re.fullmatch(r'[a-zA-Z0-9._-]+', domain)
+            if not match:
                 output = "Invalid domain name"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+            safe_domain = match.group()
             os_choice=request.POST.get('os')
             print(os_choice)
             # Use allowlist to select command; reject unknown values
@@ -435,14 +437,13 @@ def cmd_lab(request):
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
             try:
-                process = subprocess.Popen(
-                    [cmd_name, domain],
+                result = subprocess.run(
+                    [cmd_name, safe_domain],
                     shell=False,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
+                data = result.stdout.decode('utf-8')
+                stderr = result.stderr.decode('utf-8')
                 output = data + stderr
                 print(data + stderr)
             except:
