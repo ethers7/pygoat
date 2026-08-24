@@ -8,10 +8,8 @@ import os
 import pickle
 import random
 import re
-import shlex
 import socket
 import string
-import subprocess
 import uuid
 from urllib.parse import urlparse
 from dataclasses import dataclass
@@ -409,7 +407,6 @@ def cmd(request):
         return redirect('login')
 @csrf_exempt
 def cmd_lab(request):
-    ALLOWED_COMMANDS = {"nslookup": "nslookup", "dig": "dig"}
     VALID_DOMAIN_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]{0,253}[a-zA-Z0-9])?$')
 
     if request.user.is_authenticated:
@@ -422,25 +419,22 @@ def cmd_lab(request):
                 output = "Invalid domain name"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
-            os_type=request.POST.get('os')
-            print(os_type)
-            if(os_type=='win'):
-                cmd_name = ALLOWED_COMMANDS["nslookup"]
-            else:
-                cmd_name = ALLOWED_COMMANDS["dig"]
-
             try:
-                process = subprocess.Popen(
-                    [cmd_name, shlex.quote(domain)],
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                output = data + stderr
-                print(data + stderr)
-            except:
+                results = socket.getaddrinfo(domain, None)
+                seen = set()
+                lines = [f"DNS lookup for: {domain}\n"]
+                for family, socktype, proto, canonname, sockaddr in results:
+                    addr = sockaddr[0]
+                    if addr not in seen:
+                        seen.add(addr)
+                        family_name = "IPv6" if family == socket.AF_INET6 else "IPv4"
+                        lines.append(f"Address: {addr} ({family_name})")
+                if not seen:
+                    lines.append("No addresses found.")
+                output = "\n".join(lines)
+            except socket.gaierror as e:
+                output = f"DNS resolution failed: {e}"
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
