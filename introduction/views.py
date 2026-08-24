@@ -1,15 +1,19 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import pickle
 import random
 import re
+import shlex
+import socket
 import string
 import subprocess
 import uuid
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
@@ -418,25 +422,29 @@ def cmd_lab(request):
             domain=request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            os=request.POST.get('os')
-            print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
+            # Validate domain: only allow valid domain name characters
+            if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?$', domain):
+                output = "Invalid domain name"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+            os_choice=request.POST.get('os')
+            print(os_choice)
+            # Allowlist of permitted command binaries
+            ALLOWED_COMMANDS = {'win': '/usr/bin/nslookup', 'linux': '/usr/bin/dig'}
+            if os_choice == 'win':
+                cmd_binary = ALLOWED_COMMANDS['win']
             else:
-                command = "dig {}".format(domain)
-            
+                cmd_binary = ALLOWED_COMMANDS['linux']
+
+            safe_domain = shlex.quote(domain)
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
                 process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
+                    [cmd_binary, safe_domain],
+                    shell=False,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
                 data = stdout.decode('utf-8')
                 stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
                 output = data + stderr
                 print(data + stderr)
             except:
@@ -952,6 +960,52 @@ def ssrf_target(request):
     else:
         return render(request,"Lab/ssrf/ssrf_target.html",{"access_denied":True})
 
+def _is_ssrf_safe_url(url):
+    """Validate a URL to prevent SSRF attacks.
+
+    Checks that:
+    - The scheme is http or https
+    - The hostname resolves to a non-private IP address
+    - The hostname is not a known internal/metadata endpoint
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+
+    if parsed.scheme not in ("http", "https"):
+        return False
+
+    hostname = parsed.hostname
+    if not hostname:
+        return False
+
+    # Block known dangerous hostnames
+    blocked_hostnames = {"localhost", "metadata.google.internal"}
+    if hostname in blocked_hostnames:
+        return False
+
+    # Resolve hostname and check all resolved IPs are public
+    try:
+        addr_infos = socket.getaddrinfo(hostname, parsed.port or 80, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        return False
+
+    if not addr_infos:
+        return False
+
+    for addr_info in addr_infos:
+        ip_str = addr_info[4][0]
+        ip = ipaddress.ip_address(ip_str)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            return False
+        # Block AWS/cloud metadata IP
+        if ip == ipaddress.ip_address("169.254.169.254"):
+            return False
+
+    return True
+
+
 @authentication_decorator
 def ssrf_lab2(request):
     if request.method == "GET":
@@ -959,10 +1013,16 @@ def ssrf_lab2(request):
 
     elif request.method == "POST":
         url = request.POST["url"]
+        if not _is_ssrf_safe_url(url):
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "URL not allowed"})
         try:
-            response = requests.get(url)
-            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+            response = requests.get(url, timeout=5)
+            return render(
+                request,
+                "Lab/ssrf/ssrf_lab2.html",
+                {"response": "Status: " + str(response.status_code)},
+            )
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
