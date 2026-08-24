@@ -412,6 +412,9 @@ def cmd_lab(request):
             domain=request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
+            # Validate domain to prevent command injection
+            if not domain or not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,253}[a-zA-Z0-9]$', domain):
+                return render(request, 'Lab/CMD/cmd_lab.html', {"output": "Invalid domain name"})
             os=request.POST.get('os')
             print(os)
             if(os=='win'):
