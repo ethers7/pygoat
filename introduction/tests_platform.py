@@ -74,6 +74,14 @@ class PlatformRegressionTests(TestCase):
         r = self.client.post("/cmd_lab", {"domain": "example.com", "os": "win"})
         self.assertEqual(r.status_code, 200)
 
+    def test_cmd_lab_rejects_invalid_domain(self):
+        """Verify cmd_lab rejects domains with argument-injection characters."""
+        self.client.force_login(self.user)
+        for bad in ("-f/etc/passwd", "; rm -rf /", "$(whoami)", "a&b"):
+            r = self.client.post("/cmd_lab", {"domain": bad, "os": "linux"})
+            self.assertEqual(r.status_code, 200)
+            self.assertContains(r, "Invalid domain")
+
     def test_other_lesson_pages_still_route(self):
         self.client.force_login(self.user)
         for name in ("xss", "sql"):

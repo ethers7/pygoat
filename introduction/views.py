@@ -8,7 +8,6 @@ import pickle
 import random
 import re
 import string
-import shlex
 import subprocess
 import uuid
 from dataclasses import dataclass
@@ -419,6 +418,12 @@ def cmd_lab(request):
             domain=request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
+            # Validate domain: only allow valid hostname/IP characters, reject
+            # argument injection (leading dash) and shell metacharacters.
+            if not domain or not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9.\-:]*[a-zA-Z0-9])?$', domain):
+                output = "Invalid domain"
+                return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
+
             ALLOWED_COMMANDS = {"nslookup", "dig"}
             os_param = request.POST.get('os')
             print(os_param)
@@ -433,7 +438,7 @@ def cmd_lab(request):
 
             try:
                 process = subprocess.Popen(
-                    [cmd_name, shlex.quote(domain)],
+                    [cmd_name, domain],
                     shell=False,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
