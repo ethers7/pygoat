@@ -3,7 +3,7 @@ from unittest.mock import patch
 from django.contrib.auth.models import User
 from django.test import TestCase, RequestFactory
 
-from introduction.views import _is_safe_url
+from introduction.views import _is_safe_url, xxe_parse
 
 
 class IsSSRFSafeUrlTests(TestCase):
@@ -100,3 +100,29 @@ class SSRFLab2ViewTests(TestCase):
     def test_get_renders_form(self):
         response = self.client.get("/ssrf_lab2")
         self.assertEqual(response.status_code, 200)
+
+
+class XXEParseSecureTests(TestCase):
+    """Tests that XML parsing uses defusedxml and rejects XXE payloads."""
+
+    def test_parseString_uses_defusedxml(self):
+        """Verify that the parseString used in views is from defusedxml."""
+        from introduction import views
+        import defusedxml.pulldom
+
+        self.assertIs(views.parseString, defusedxml.pulldom.parseString)
+
+    def test_xxe_payload_rejected(self):
+        """Verify that an XXE payload with external entity is rejected."""
+        from defusedxml.pulldom import parseString
+        from defusedxml import DTDForbidden, EntitiesForbidden, ExternalReferenceForbidden
+
+        xxe_payload = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<!DOCTYPE foo [ <!ENTITY xxe SYSTEM "file:///etc/passwd"> ]>'
+            '<comment><text>&xxe;</text></comment>'
+        )
+        with self.assertRaises((DTDForbidden, EntitiesForbidden, ExternalReferenceForbidden)):
+            doc = parseString(xxe_payload)
+            for event, node in doc:
+                pass
