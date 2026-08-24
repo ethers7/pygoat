@@ -430,28 +430,21 @@ def cmd_lab(request):
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             os_type=request.POST.get('os')
             print(os_type)
-            # Allowlist of permitted commands
-            ALLOWED_COMMANDS = {
-                'win': ['nslookup'],
-                'linux': ['dig'],
-            }
-            cmd_key = 'win' if os_type == 'win' else 'linux'
-            allowed_cmd = ALLOWED_COMMANDS[cmd_key][0]
-            validated_domain = str(domain)
-            cmd_args = [allowed_cmd, validated_domain]
 
+            # Use Python's socket module for DNS resolution instead of subprocess
             try:
-                result = subprocess.run(
-                    cmd_args,
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=30)
-                data = result.stdout.decode('utf-8')
-                stderr_output = result.stderr.decode('utf-8')
-                output = data + stderr_output
-                print(data + stderr_output)
-            except subprocess.TimeoutExpired:
+                results = socket.getaddrinfo(domain, None)
+                # Collect unique IP addresses
+                addresses = sorted(set(addr[4][0] for addr in results))
+                lines = []
+                lines.append("DNS Lookup: " + domain)
+                lines.append("")
+                for addr in addresses:
+                    lines.append(domain + " has address " + addr)
+                output = "\n".join(lines)
+            except socket.gaierror as e:
+                output = "DNS lookup failed: " + str(e)
+            except socket.timeout:
                 output = "Command timed out"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             except Exception:
