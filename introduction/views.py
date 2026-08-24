@@ -8,6 +8,7 @@ import os
 import pickle
 import random
 import re
+import shlex
 import socket
 import string
 from urllib.parse import urlparse
@@ -439,7 +440,7 @@ def cmd_lab(request):
 
             try:
                 process = subprocess.Popen(
-                    [command_name, domain],
+                    [command_name, shlex.quote(domain)],
                     shell=False,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
