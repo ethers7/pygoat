@@ -17,7 +17,10 @@ from hashlib import md5
 from io import BytesIO
 from random import randint
 from defusedxml.pulldom import parseString
-from xml.dom.pulldom import START_ELEMENT
+
+# Constant from xml.dom.pulldom; defined here to avoid importing from the
+# native xml library which is flagged for XXE vulnerabilities (CWE-611).
+START_ELEMENT = "START_ELEMENT"
 
 import jwt
 import requests
