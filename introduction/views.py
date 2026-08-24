@@ -421,16 +421,12 @@ def cmd_lab(request):
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             os=request.POST.get('os')
             print(os)
-            # Sanitize domain for subprocess use (defense-in-depth after regex validation)
-            safe_domain = "".join(c for c in domain if c.isalnum() or c in '.-')
-            if(os=='win'):
-                cmd_args = ["nslookup", safe_domain]
-            else:
-                cmd_args = ["dig", safe_domain]
-
+            ALLOWED_COMMANDS = {"win": "nslookup", "linux": "dig"}
+            cmd_name = ALLOWED_COMMANDS.get(os, "dig")
             try:
+                resolved = socket.gethostbyname(domain)
                 process = subprocess.Popen(
-                    cmd_args,
+                    [cmd_name, resolved],
                     shell=False,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
