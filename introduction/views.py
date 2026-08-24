@@ -1,6 +1,7 @@
 import base64
 import datetime
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -22,6 +23,7 @@ import jwt
 import requests
 import yaml
 from argon2 import PasswordHasher
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import authenticate, login
 from django.contrib.auth.forms import UserCreationForm
@@ -199,20 +201,38 @@ def insec_des(request):
 @dataclass
 class TestUser:
     admin: int = 0
-pickled_user = pickle.dumps(TestUser())
-encoded_user = base64.b64encode(pickled_user)
+
+def _sign_token(data):
+    """Create an HMAC-signed JSON token to avoid insecure pickle deserialization."""
+    payload = json.dumps(data).encode('utf-8')
+    signature = hmac.new(settings.SECRET_KEY.encode('utf-8'), payload, hashlib.sha256).hexdigest()
+    token_bytes = base64.b64encode(payload + b'.' + signature.encode('utf-8'))
+    return token_bytes
+
+def _verify_token(token_str):
+    """Verify and decode an HMAC-signed JSON token. Returns None if invalid."""
+    try:
+        decoded = base64.b64decode(token_str)
+        payload_bytes, sig = decoded.rsplit(b'.', 1)
+        expected_sig = hmac.new(settings.SECRET_KEY.encode('utf-8'), payload_bytes, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig.decode('utf-8'), expected_sig):
+            return None
+        return json.loads(payload_bytes.decode('utf-8'))
+    except (ValueError, KeyError, json.JSONDecodeError):
+        return None
+
+default_user_token = _sign_token({"admin": 0})
 
 def insec_des_lab(request):
     if request.user.is_authenticated:
         response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Only Admins can see this page"})
         token = request.COOKIES.get('token')
         if token == None:
-            token = encoded_user
+            token = default_user_token
             response.set_cookie(key='token',value=token.decode('utf-8'))
         else:
-            token = base64.b64decode(token)
-            admin = pickle.loads(token)
-            if admin.admin == 1:
+            data = _verify_token(token)
+            if data is not None and data.get("admin") == 1:
                 response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Welcome Admin, SECRETKEY:ADMIN123"})
                 return response
 
@@ -557,7 +577,7 @@ def a9_lab(request):
             try :
                 file=request.FILES["file"]
                 try :
-                    data = yaml.load(file,yaml.Loader)
+                    data = yaml.safe_load(file)
                     
                     return render(request,"Lab/A9/a9_lab.html",{"data":data})
                 except:
