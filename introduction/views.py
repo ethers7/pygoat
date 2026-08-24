@@ -1,22 +1,26 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
-import pickle
 import random
 import re
+import socket
 import string
 import subprocess
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
 from random import randint
-from xml.dom.pulldom import START_ELEMENT, parseString
-from xml.sax import make_parser
-from xml.sax.handler import feature_external_ges
+from defusedxml.pulldom import parseString
+
+# Event-type constant used by pulldom; defined locally to avoid importing the
+# native xml library (which is vulnerable to XXE per CWE-611).
+START_ELEMENT = "START_ELEMENT"
 
 import jwt
 import requests
@@ -199,8 +203,8 @@ def insec_des(request):
 @dataclass
 class TestUser:
     admin: int = 0
-pickled_user = pickle.dumps(TestUser())
-encoded_user = base64.b64encode(pickled_user)
+default_user_json = json.dumps({"admin": 0})
+encoded_user = base64.b64encode(default_user_json.encode('utf-8'))
 
 def insec_des_lab(request):
     if request.user.is_authenticated:
@@ -211,8 +215,8 @@ def insec_des_lab(request):
             response.set_cookie(key='token',value=token.decode('utf-8'))
         else:
             token = base64.b64decode(token)
-            admin = pickle.loads(token)
-            if admin.admin == 1:
+            admin_data = json.loads(token)
+            if admin_data.get("admin") == 1:
                 response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Welcome Admin, SECRETKEY:ADMIN123"})
                 return response
 
@@ -255,9 +259,7 @@ def xxe_see(request):
 @csrf_exempt
 def xxe_parse(request):
 
-    parser = make_parser()
-    parser.setFeature(feature_external_ges, True)
-    doc = parseString(request.body.decode('utf-8'), parser=parser)
+    doc = parseString(request.body.decode('utf-8'))
     for event, node in doc:
         if event == START_ELEMENT and node.tagName == 'text':
             doc.expandNode(node)
@@ -557,7 +559,7 @@ def a9_lab(request):
             try :
                 file=request.FILES["file"]
                 try :
-                    data = yaml.load(file,yaml.Loader)
+                    data = yaml.safe_load(file)
                     
                     return render(request,"Lab/A9/a9_lab.html",{"data":data})
                 except:
@@ -952,6 +954,37 @@ def ssrf_target(request):
     else:
         return render(request,"Lab/ssrf/ssrf_target.html",{"access_denied":True})
 
+def _is_safe_url(url):
+    """Validate that a URL is safe to request (not targeting internal/private resources)."""
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return False
+
+    if parsed.scheme not in ("http", "https"):
+        return False
+
+    hostname = parsed.hostname
+    if not hostname:
+        return False
+
+    # Resolve hostname to IP addresses and check each one
+    try:
+        addrinfo = socket.getaddrinfo(hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
+    except socket.gaierror:
+        return False
+
+    for family, _, _, _, sockaddr in addrinfo:
+        ip = ipaddress.ip_address(sockaddr[0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            return False
+        # Block cloud metadata endpoint explicitly
+        if ip == ipaddress.ip_address("169.254.169.254"):
+            return False
+
+    return True
+
+
 @authentication_decorator
 def ssrf_lab2(request):
     if request.method == "GET":
@@ -959,10 +992,12 @@ def ssrf_lab2(request):
 
     elif request.method == "POST":
         url = request.POST["url"]
+        if not _is_safe_url(url):
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "URL not allowed: must be a public HTTP(S) URL"})
         try:
-            response = requests.get(url)
+            response = requests.get(url, timeout=10)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
