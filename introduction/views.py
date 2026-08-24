@@ -413,33 +413,45 @@ def cmd(request):
         return redirect('login')
 @csrf_exempt
 def cmd_lab(request):
+    # Allowlist of permitted DNS/network lookup commands
+    ALLOWED_COMMANDS = {"nslookup", "dig", "host", "ping"}
+
     if request.user.is_authenticated:
         if(request.method=="POST"):
             domain=request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            os=request.POST.get('os')
-            print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
+
+            # Validate domain: only allow alphanumeric, dots, hyphens, and colons (for port)
+            if not re.match(r'^[a-zA-Z0-9.\-:]+$', domain):
+                output = "Invalid domain name"
+                return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
+
+            os_type = request.POST.get('os')
+            print(os_type)
+            if(os_type == 'win'):
+                cmd_name = "nslookup"
             else:
-                command = "dig {}".format(domain)
-            
+                cmd_name = "dig"
+
+            # Validate command against allowlist
+            if cmd_name not in ALLOWED_COMMANDS:
+                output = "Command not allowed"
+                return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
-                process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
-                output = data + stderr
-                print(data + stderr)
-            except:
+                result = subprocess.run(
+                    [cmd_name, domain],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                output = result.stdout + result.stderr
+                print(output)
+            except subprocess.TimeoutExpired:
+                output = "Command timed out"
+                return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
