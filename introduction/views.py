@@ -7,6 +7,7 @@ import os
 import pickle
 import random
 import re
+import shlex
 import string
 import subprocess
 import uuid
@@ -411,34 +412,55 @@ def cmd(request):
         return render(request,'Lab/CMD/cmd.html')
     else:
         return redirect('login')
+def _validate_domain(raw_domain):
+    """Validate and sanitize a domain string. Raises ValueError if invalid."""
+    # Remove all common protocols (case-insensitive) and www prefix
+    sanitized = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', raw_domain, flags=re.IGNORECASE)
+    # Validate domain: only allow alphanumeric, dots, hyphens, and colons (for port)
+    if not re.match(r'^[a-zA-Z0-9.\-:]+$', sanitized):
+        raise ValueError("Invalid domain")
+    return sanitized
+
+
+def _run_dns_lookup(cmd_binary, validated_domain):
+    """Execute a DNS lookup command with pre-validated arguments.
+
+    Both arguments must be validated before calling this function:
+    - cmd_binary must come from the ALLOWED_COMMANDS allowlist
+    - validated_domain must have passed _validate_domain()
+    """
+    process = subprocess.Popen(
+        [cmd_binary, validated_domain],
+        shell=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE)
+    stdout, stderr = process.communicate()
+    return stdout.decode('utf-8'), stderr.decode('utf-8')
+
+
 @csrf_exempt
 def cmd_lab(request):
     if request.user.is_authenticated:
         if(request.method=="POST"):
             domain=request.POST.get('domain')
-            # Remove all common protocols (case-insensitive) and www prefix
-            domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            os=request.POST.get('os')
-            print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
-            else:
-                command = "dig {}".format(domain)
-            
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
-                process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
-                output = data + stderr
-                print(data + stderr)
+                validated_domain = _validate_domain(domain)
+            except ValueError:
+                output = "Invalid domain"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+            os_choice=request.POST.get('os')
+            print(os_choice)
+            # Allowlist of permitted command binaries
+            ALLOWED_COMMANDS = {
+                'win': 'nslookup',
+                'linux': 'dig',
+            }
+            cmd_binary = ALLOWED_COMMANDS.get(os_choice, 'dig')
+
+            try:
+                data, err = _run_dns_lookup(cmd_binary, validated_domain)
+                output = data + err
+                print(data + err)
             except:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
