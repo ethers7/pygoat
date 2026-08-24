@@ -12,7 +12,14 @@ COPY . .
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
+# Create a non-root user and grant ownership of application files
+RUN adduser --disabled-password --gecos '' appuser \
+    && chown -R appuser:appuser /app
+
 EXPOSE 8000
+
+# Run as non-root user
+USER appuser
 
 # Use the entrypoint script
 ENTRYPOINT ["/entrypoint.sh"]
