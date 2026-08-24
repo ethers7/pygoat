@@ -252,15 +252,30 @@ def xxe_see(request):
 
 
 def xxe_parse(request):
+    # Validate request body before processing
+    MAX_BODY_LENGTH = 5000
+    body = request.body.decode('utf-8')
+    if not body or len(body) > MAX_BODY_LENGTH:
+        return HttpResponseBadRequest("Invalid request body")
 
-    doc = parseString(request.body.decode('utf-8'))
+    doc = parseString(body)
+    text = None
     for event, node in doc:
         if event == START_ELEMENT and node.tagName == 'text':
             doc.expandNode(node)
             text = node.toxml()
+    if text is None:
+        return HttpResponseBadRequest("Missing text element")
     startInd = text.find('>')
     endInd = text.find('<', startInd)
     text = text[startInd + 1:endInd:]
+    # Validate extracted text before writing to database
+    MAX_COMMENT_LENGTH = 1000
+    if len(text) > MAX_COMMENT_LENGTH:
+        return HttpResponseBadRequest("Comment too long")
+    text = text.strip()
+    if not text:
+        return HttpResponseBadRequest("Empty comment")
     p=comments.objects.filter(id=1).update(comment=text)
 
     return render(request, 'Lab/XXE/xxe_lab.html')
@@ -1002,7 +1017,11 @@ def ssti_lab(request):
             users_blogs = Blogs.objects.filter(author=request.user)
             return render(request,"Lab_2021/A3_Injection/ssti_lab.html", {"blogs":users_blogs})
         elif request.method=="POST":
-            blog = request.POST["blog"]
+            blog = request.POST.get("blog", "")
+            # Validate blog content before writing to file
+            MAX_BLOG_LENGTH = 5000
+            if not blog or not isinstance(blog, str) or len(blog) > MAX_BLOG_LENGTH:
+                return render(request, "Lab_2021/A3_Injection/ssti_lab.html", {"error": "Invalid blog content"})
             id = str(uuid.uuid4()).split('-')[-1]
 
             blog = filter_blog(blog)
@@ -1014,10 +1033,10 @@ def ssti_lab(request):
 
             blog = prepend_code + blog + "{% endblock %}"
             new_blog = Blogs.objects.create(author = request.user, blog_id = id)
-            new_blog.save() 
+            new_blog.save()
             dirname = os.path.dirname(__file__)
             filename = os.path.join(dirname, f"templates/Lab_2021/A3_Injection/Blogs/{id}.html")
-            file = open(filename, "w+") 
+            file = open(filename, "w+")
             file.write(blog)
             file.close()
             return redirect(f'blog/{id}')

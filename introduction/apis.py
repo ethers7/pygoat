@@ -60,6 +60,12 @@ def log_function_checker(request):
         csrf_token = request.POST.get("csrfmiddlewaretoken")
         log_code = request.POST.get('log_code')
         api_code = request.POST.get('api_code')
+        # Validate request data before writing to files
+        MAX_CODE_LENGTH = 10000
+        if not log_code or not isinstance(log_code, str) or len(log_code) > MAX_CODE_LENGTH:
+            return JsonResponse({"message": "Invalid or missing log_code"}, status=400)
+        if not api_code or not isinstance(api_code, str) or len(api_code) > MAX_CODE_LENGTH:
+            return JsonResponse({"message": "Invalid or missing api_code"}, status=400)
         dirname = os.path.dirname(__file__)
         log_filename = os.path.join(dirname, "playground/A9/main.py")
         api_filename = os.path.join(dirname, "playground/A9/api.py")
@@ -122,6 +128,10 @@ def A6_disscussion_api_2(request):
         return JsonResponse({"message":"method not allowed"},status = 405)
     try:
         code = request.POST.get('code')
+        # Validate request data before writing to file
+        MAX_CODE_LENGTH = 10000
+        if not code or not isinstance(code, str) or len(code) > MAX_CODE_LENGTH:
+            return JsonResponse({"message": "Invalid or missing code"}, status=400)
         dirname = os.path.dirname(__file__)
         filename = os.path.join(dirname, "playground/A6/utility.py")
         f = open(filename,"w")
