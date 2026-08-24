@@ -62,6 +62,27 @@ class PlatformRegressionTests(TestCase):
         self.assertEqual(self.client.get("/cmd").status_code, 200)
         self.assertEqual(self.client.get("/cmd_lab").status_code, 200)
 
+    def test_cmd_lab_rejects_malicious_domain(self):
+        """Command injection payload must be rejected by domain validation."""
+        self.client.force_login(self.user)
+        r = self.client.post(
+            "/cmd_lab",
+            {"domain": "example.com; cat /etc/passwd", "os": "linux"},
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Invalid domain name")
+
+    def test_cmd_lab_accepts_valid_domain(self):
+        """A well-formed domain must be accepted (command may fail if binary missing)."""
+        self.client.force_login(self.user)
+        r = self.client.post(
+            "/cmd_lab",
+            {"domain": "example.com", "os": "linux"},
+        )
+        self.assertEqual(r.status_code, 200)
+        # Should NOT show the invalid domain message
+        self.assertNotContains(r, "Invalid domain name")
+
     def test_other_lesson_pages_still_route(self):
         self.client.force_login(self.user)
         for name in ("xss", "sql"):
