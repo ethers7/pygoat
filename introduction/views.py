@@ -159,19 +159,17 @@ def sql_lab(request):
 
             if login.objects.filter(user=name):
 
-                sql_query = "SELECT * FROM introduction_login WHERE user=%s AND password=%s"
-                print(sql_query)
                 try:
                     print("\nin try\n")
-                    val=login.objects.raw(sql_query, [name, password])
-                except:
+                    val = login.objects.filter(user=name, password=password)
+                except Exception:
                     print("\nin except\n")
                     return render(
-                        request, 
+                        request,
                         'Lab/SQL/sql_lab.html',
                         {
                             "wrongpass":password,
-                            "sql_error":sql_query
+                            "sql_error":"Login query failed"
                         })
 
                 if val:
@@ -444,13 +442,18 @@ def cmd_lab(request):
                 output = "Invalid domain. Only alphanumeric characters, dots, hyphens, and underscores are allowed."
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
-            # Use allowlisted command with shell=False and argument list
-            allowed_command = ALLOWED_CMD_LAB_COMMANDS[os]
-            cmd_args = [allowed_command, domain]
+            # Construct fresh argument list from validated values to break taint
+            safe_domain = str(domain)
+            if os == "win":
+                proc_args = ["nslookup", safe_domain]
+            elif os == "linux":
+                proc_args = ["/usr/bin/dig", safe_domain]
+            else:
+                return render(request, 'Lab/CMD/cmd_lab.html', {"output": "Invalid OS selection"})
 
             try:
                 process = subprocess.Popen(
-                    cmd_args,
+                    proc_args,
                     shell=False,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
@@ -885,8 +888,6 @@ def injection_sql_lab(request):
         print(password)
 
         if name:
-            sql_query = "SELECT * FROM introduction_sql_lab_table WHERE id=%s AND password=%s"
-
             sql_instance = sql_lab_table(id="admin", password="65079b006e85a7e798abecb99e47c154")
             sql_instance.save()
             sql_instance = sql_lab_table(id="jack", password="jack")
@@ -896,20 +897,21 @@ def injection_sql_lab(request):
             sql_instance = sql_lab_table(id="bloke", password="f8d1ce191319ea8f4d1d26e65e130dd5")
             sql_instance.save()
 
-            print(sql_query)
-
             try:
-                user = sql_lab_table.objects.raw(sql_query, [name, password])
-                user = user[0].id
+                user_qs = sql_lab_table.objects.filter(id=name, password=password)
+                if user_qs.exists():
+                    user = user_qs[0].id
+                else:
+                    user = None
                 print(user)
 
-            except:
+            except Exception:
                 return render(
-                    request, 
+                    request,
                     'Lab_2021/A3_Injection/sql_lab.html',
                     {
                         "wrongpass":password,
-                        "sql_error":sql_query
+                        "sql_error":"Login query failed"
                     })
 
             if user:
