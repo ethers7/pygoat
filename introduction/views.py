@@ -6,7 +6,6 @@ import logging
 import os
 import random
 import re
-import shlex
 import string
 import subprocess
 import uuid
@@ -410,35 +409,37 @@ def cmd(request):
         return render(request,'Lab/CMD/cmd.html')
     else:
         return redirect('login')
+_ALLOWED_COMMANDS = {'win': 'nslookup', 'linux': 'dig'}
+_DOMAIN_PATTERN = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$')
+
+
+def _validate_domain(raw_input):
+    cleaned = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', raw_input or '', flags=re.IGNORECASE)
+    if not cleaned or not _DOMAIN_PATTERN.match(cleaned) or len(cleaned) > 253:
+        return None
+    return cleaned
+
+
 @csrf_exempt
 def cmd_lab(request):
-    # Allowlisted commands for DNS lookup
-    ALLOWED_COMMANDS = {'win': 'nslookup', 'linux': 'dig'}
-    # Strict hostname/domain validation pattern
-    DOMAIN_PATTERN = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$')
-
     if request.user.is_authenticated:
         if(request.method=="POST"):
-            domain=request.POST.get('domain')
-            # Remove all common protocols (case-insensitive) and www prefix
-            domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
+            validated_domain = _validate_domain(request.POST.get('domain'))
             os_type=request.POST.get('os')
             print(os_type)
 
-            # Validate domain input against allowlist pattern
-            if not domain or not DOMAIN_PATTERN.match(domain) or len(domain) > 253:
+            if validated_domain is None:
                 output = "Invalid domain name"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
-            # Select command from allowlist only
             if os_type == 'win':
-                cmd_name = ALLOWED_COMMANDS['win']
+                cmd_name = _ALLOWED_COMMANDS['win']
             else:
-                cmd_name = ALLOWED_COMMANDS['linux']
+                cmd_name = _ALLOWED_COMMANDS['linux']
 
             try:
                 process = subprocess.Popen(
-                    [cmd_name, shlex.quote(domain)],
+                    [cmd_name, validated_domain],
                     shell=False,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
