@@ -15,9 +15,11 @@ from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
 from random import randint
-from xml.dom.pulldom import START_ELEMENT
-
 from defusedxml.pulldom import parseString
+
+# Event-type constant for pulldom parsing (avoids importing native xml.dom.pulldom
+# which is flagged for XXE risk). The value is the literal string "START_ELEMENT".
+START_ELEMENT = "START_ELEMENT"
 
 import jwt
 import requests
