@@ -94,3 +94,24 @@ class PlatformRegressionTests(TestCase):
         )
         self.assertEqual(r.status_code, 302)
         self.assertEqual(self.client.get("/").status_code, 200)
+
+    def test_cmd_lab_rejects_injection(self):
+        """Domain with shell metacharacters must be rejected."""
+        self.client.force_login(self.user)
+        r = self.client.post(
+            "/cmd_lab",
+            {"domain": "example.com; cat /etc/passwd", "os": "linux"},
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("Invalid domain", r.content.decode())
+
+    def test_cmd_lab_accepts_valid_domain(self):
+        """A well-formed domain should not be rejected by validation."""
+        self.client.force_login(self.user)
+        r = self.client.post(
+            "/cmd_lab",
+            {"domain": "example.com", "os": "linux"},
+        )
+        self.assertEqual(r.status_code, 200)
+        # Should not show "Invalid domain" for a clean input
+        self.assertNotIn("Invalid domain", r.content.decode())
