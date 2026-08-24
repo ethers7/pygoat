@@ -158,30 +158,25 @@ def sql_lab(request):
 
             if login.objects.filter(user=name):
 
-                sql_query = "SELECT * FROM introduction_login WHERE user=%s AND password=%s"
                 try:
-                    print("\nin try\n")
-                    val=login.objects.raw(sql_query, [name, password])
-                except:
-                    print("\nin except\n")
+                    val = login.objects.filter(user=name, password=password)
+                except Exception:
                     return render(
-                        request, 
+                        request,
                         'Lab/SQL/sql_lab.html',
                         {
-                            "wrongpass":password,
-                            "sql_error":sql_query
+                            "wrongpass": password,
                         })
 
                 if val:
-                    user=val[0].user
-                    return render(request, 'Lab/SQL/sql_lab.html',{"user1":user})
+                    user = val[0].user
+                    return render(request, 'Lab/SQL/sql_lab.html', {"user1": user})
                 else:
                     return render(
-                        request, 
+                        request,
                         'Lab/SQL/sql_lab.html',
                         {
-                            "wrongpass":password,
-                            "sql_error":sql_query
+                            "wrongpass": password,
                         })
             else:
                 return render(request, 'Lab/SQL/sql_lab.html',{"no": "User not found"})
