@@ -1,14 +1,16 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import pickle
 import random
 import re
+import socket
 import string
-import subprocess
+from urllib.parse import urlparse
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
@@ -418,28 +420,23 @@ def cmd_lab(request):
             domain=request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            os=request.POST.get('os')
-            print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
-            else:
-                command = "dig {}".format(domain)
-            
+
+            # Validate domain: only allow valid DNS characters (alphanumeric, dots, hyphens)
+            if not domain or not re.match(r'^[a-zA-Z0-9._-]+$', domain):
+                output = "Invalid domain name"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
-                process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
-                output = data + stderr
-                print(data + stderr)
-            except:
+                results = socket.getaddrinfo(domain, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+                addresses = sorted(set(addr[4][0] for addr in results))
+                output = "DNS lookup for %s:\n" % domain
+                for addr in addresses:
+                    output += "  Address: %s\n" % addr
+                if not addresses:
+                    output += "  No addresses found.\n"
+            except socket.gaierror as e:
+                output = "DNS lookup failed for %s: %s" % (domain, str(e))
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
@@ -952,6 +949,31 @@ def ssrf_target(request):
     else:
         return render(request,"Lab/ssrf/ssrf_target.html",{"access_denied":True})
 
+def _is_safe_url_for_ssrf(url):
+    """Validate that a URL is safe to request (not targeting internal/private resources)."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False
+    hostname = parsed.hostname
+    if not hostname:
+        return False
+    # Reject localhost variants
+    if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        return False
+    try:
+        resolved_ips = socket.getaddrinfo(hostname, parsed.port or 80, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        return False
+    for family, socktype, proto, canonname, sockaddr in resolved_ips:
+        ip = ipaddress.ip_address(sockaddr[0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            return False
+        # Block cloud metadata endpoint
+        if ip == ipaddress.ip_address("169.254.169.254"):
+            return False
+    return True
+
+
 @authentication_decorator
 def ssrf_lab2(request):
     if request.method == "GET":
@@ -959,10 +981,12 @@ def ssrf_lab2(request):
 
     elif request.method == "POST":
         url = request.POST["url"]
+        if not _is_safe_url_for_ssrf(url):
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "URL not allowed"})
         try:
             response = requests.get(url)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
