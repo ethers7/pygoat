@@ -1,15 +1,19 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import pickle
 import random
 import re
+import shlex
+import socket
 import string
 import subprocess
 import uuid
+import urllib.parse
 from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
@@ -418,19 +422,27 @@ def cmd_lab(request):
             domain=request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
+            # Validate domain: allow only alphanumeric, hyphens, dots, and colons (for port)
+            if not re.match(r'^[a-zA-Z0-9.\-:]+$', domain):
+                output = "Invalid domain name"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             os=request.POST.get('os')
             print(os)
+            # Allowlist of permitted DNS commands
+            allowed_commands = ['nslookup', 'dig']
             if(os=='win'):
-                command="nslookup {}".format(domain)
+                cmd_name = "nslookup"
             else:
-                command = "dig {}".format(domain)
-            
+                cmd_name = "dig"
+            if cmd_name not in allowed_commands:
+                output = "Invalid command"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
                 process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
+                    [cmd_name, domain],
+                    shell=False,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
                 data = stdout.decode('utf-8')
@@ -557,7 +569,7 @@ def a9_lab(request):
             try :
                 file=request.FILES["file"]
                 try :
-                    data = yaml.load(file,yaml.Loader)
+                    data = yaml.safe_load(file)
                     
                     return render(request,"Lab/A9/a9_lab.html",{"data":data})
                 except:
@@ -861,8 +873,6 @@ def injection_sql_lab(request):
         print(password)
 
         if name:
-            sql_query = "SELECT * FROM introduction_sql_lab_table WHERE id='"+name+"'AND password='"+password+"'"
-
             sql_instance = sql_lab_table(id="admin", password="65079b006e85a7e798abecb99e47c154")
             sql_instance.save()
             sql_instance = sql_lab_table(id="jack", password="jack")
@@ -872,31 +882,29 @@ def injection_sql_lab(request):
             sql_instance = sql_lab_table(id="bloke", password="f8d1ce191319ea8f4d1d26e65e130dd5")
             sql_instance.save()
 
-            print(sql_query)
-
             try:
-                user = sql_lab_table.objects.raw(sql_query)
-                user = user[0].id
+                user = sql_lab_table.objects.filter(id=name, password=password).first()
+                user = user.id
                 print(user)
 
-            except:
+            except (AttributeError, Exception):
                 return render(
-                    request, 
+                    request,
                     'Lab_2021/A3_Injection/sql_lab.html',
                     {
                         "wrongpass":password,
-                        "sql_error":sql_query
+                        "sql_error":"Invalid credentials"
                     })
 
             if user:
                 return render(request, 'Lab_2021/A3_Injection/sql_lab.html',{"user1":user})
             else:
                 return render(
-                    request, 
+                    request,
                     'Lab_2021/A3_Injection/sql_lab.html',
                     {
                         "wrongpass":password,
-                        "sql_error":sql_query
+                        "sql_error":"Invalid credentials"
                     })
         else:
             return render(request, 'Lab_2021/A3_Injection/sql_lab.html')
@@ -952,6 +960,48 @@ def ssrf_target(request):
     else:
         return render(request,"Lab/ssrf/ssrf_target.html",{"access_denied":True})
 
+_SSRF_ALLOWED_SCHEMES = {"http", "https"}
+
+
+def _is_safe_url(url):
+    """Validate a URL against SSRF attacks.
+
+    Returns True only when the URL uses an allowed scheme and resolves
+    to a public (non-private, non-reserved) IP address.
+    """
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except Exception:
+        return False
+
+    if parsed.scheme not in _SSRF_ALLOWED_SCHEMES:
+        return False
+
+    hostname = parsed.hostname
+    if not hostname:
+        return False
+
+    # Resolve hostname to IP(s) and reject any private/reserved address
+    try:
+        addrinfos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except socket.gaierror:
+        return False
+
+    if not addrinfos:
+        return False
+
+    for addrinfo in addrinfos:
+        ip_str = addrinfo[4][0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            return False
+        if ip.is_private or ip.is_reserved or ip.is_loopback or ip.is_link_local or ip.is_multicast:
+            return False
+
+    return True
+
+
 @authentication_decorator
 def ssrf_lab2(request):
     if request.method == "GET":
@@ -959,10 +1009,13 @@ def ssrf_lab2(request):
 
     elif request.method == "POST":
         url = request.POST["url"]
+        if not _is_safe_url(url):
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "URL not allowed"})
         try:
-            response = requests.get(url)
-            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+            response = requests.get(url, timeout=5)
+            safe_status = f"Request returned status code: {response.status_code}"
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": safe_status})
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
