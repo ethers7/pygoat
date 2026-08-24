@@ -8,6 +8,7 @@ import pickle
 import random
 import re
 import string
+import shlex
 import subprocess
 import uuid
 from dataclasses import dataclass
@@ -418,19 +419,23 @@ def cmd_lab(request):
             domain=request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            os=request.POST.get('os')
-            print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
+            ALLOWED_COMMANDS = {"nslookup", "dig"}
+            os_param = request.POST.get('os')
+            print(os_param)
+            if os_param == 'win':
+                cmd_name = "nslookup"
             else:
-                command = "dig {}".format(domain)
-            
+                cmd_name = "dig"
+
+            if cmd_name not in ALLOWED_COMMANDS:
+                output = "Invalid command"
+                return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
                 process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
+                    [cmd_name, shlex.quote(domain)],
+                    shell=False,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
                 data = stdout.decode('utf-8')

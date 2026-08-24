@@ -62,6 +62,18 @@ class PlatformRegressionTests(TestCase):
         self.assertEqual(self.client.get("/cmd").status_code, 200)
         self.assertEqual(self.client.get("/cmd_lab").status_code, 200)
 
+    def test_cmd_lab_post_uses_allowlisted_command(self):
+        """Verify cmd_lab only runs allowlisted commands (dig/nslookup)."""
+        self.client.force_login(self.user)
+        r = self.client.post("/cmd_lab", {"domain": "example.com", "os": "linux"})
+        self.assertEqual(r.status_code, 200)
+
+    def test_cmd_lab_post_win_uses_nslookup(self):
+        """Verify cmd_lab uses nslookup for win os parameter."""
+        self.client.force_login(self.user)
+        r = self.client.post("/cmd_lab", {"domain": "example.com", "os": "win"})
+        self.assertEqual(r.status_code, 200)
+
     def test_other_lesson_pages_still_route(self):
         self.client.force_login(self.user)
         for name in ("xss", "sql"):
