@@ -415,9 +415,18 @@ def cmd(request):
         return render(request,'Lab/CMD/cmd.html')
     else:
         return redirect('login')
+def _run_dns_lookup(cmd_name, domain):
+    process = subprocess.Popen(
+        [cmd_name, domain],
+        shell=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE)
+    stdout, stderr = process.communicate()
+    return stdout.decode('utf-8') + stderr.decode('utf-8')
+
+
 @csrf_exempt
 def cmd_lab(request):
-    # Allowlist of permitted commands keyed by OS parameter value
     ALLOWED_COMMANDS = {
         'win': 'nslookup',
         'linux': 'dig',
@@ -426,38 +435,22 @@ def cmd_lab(request):
     if request.user.is_authenticated:
         if(request.method=="POST"):
             domain=request.POST.get('domain')
-            # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
             os=request.POST.get('os')
             print(os)
 
-            # Validate os parameter against allowlist
             cmd_name = ALLOWED_COMMANDS.get(os)
             if cmd_name is None:
                 output = "Invalid OS parameter"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
-            # Validate domain: only allow valid hostname characters
             if not re.match(r'^[a-zA-Z0-9._-]+$', domain):
                 output = "Invalid domain"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
-            # Sanitize domain for safe subprocess usage
-            safe_domain = shlex.quote(domain)
-
             try:
-                process = subprocess.Popen(
-                    [cmd_name, safe_domain],
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
-                output = data + stderr
-                print(data + stderr)
+                output = _run_dns_lookup(cmd_name, shlex.quote(domain))
+                print(output)
             except:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
