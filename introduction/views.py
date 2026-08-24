@@ -1,15 +1,17 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
-import pickle
 import random
 import re
+import socket
 import string
 import subprocess
 import uuid
+from urllib.parse import urlparse, urlunparse
 from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
@@ -199,8 +201,8 @@ def insec_des(request):
 @dataclass
 class TestUser:
     admin: int = 0
-pickled_user = pickle.dumps(TestUser())
-encoded_user = base64.b64encode(pickled_user)
+default_user_json = json.dumps({"admin": 0}).encode()
+encoded_user = base64.b64encode(default_user_json)
 
 def insec_des_lab(request):
     if request.user.is_authenticated:
@@ -211,8 +213,8 @@ def insec_des_lab(request):
             response.set_cookie(key='token',value=token.decode('utf-8'))
         else:
             token = base64.b64decode(token)
-            admin = pickle.loads(token)
-            if admin.admin == 1:
+            admin_data = json.loads(token)
+            if admin_data.get("admin") == 1:
                 response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Welcome Admin, SECRETKEY:ADMIN123"})
                 return response
 
@@ -557,7 +559,7 @@ def a9_lab(request):
             try :
                 file=request.FILES["file"]
                 try :
-                    data = yaml.load(file,yaml.Loader)
+                    data = yaml.safe_load(file)
                     
                     return render(request,"Lab/A9/a9_lab.html",{"data":data})
                 except:
@@ -960,9 +962,38 @@ def ssrf_lab2(request):
     elif request.method == "POST":
         url = request.POST["url"]
         try:
-            response = requests.get(url)
+            # Parse and validate the URL to prevent SSRF
+            parsed = urlparse(url)
+
+            # Only allow http and https schemes
+            if parsed.scheme not in ("http", "https"):
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL scheme"})
+
+            hostname = parsed.hostname
+            if not hostname:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+
+            # Resolve hostname and check for private/internal IPs
+            resolved_ip = socket.gethostbyname(hostname)
+            ip_obj = ipaddress.ip_address(resolved_ip)
+            if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_reserved:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Access to internal addresses is not allowed"})
+
+            # Reconstruct URL from validated components to break taint flow
+            validated_url = urlunparse((
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                parsed.params,
+                parsed.query,
+                parsed.fragment,
+            ))
+
+            response = requests.get(validated_url, timeout=10, allow_redirects=False)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+        except socket.gaierror:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Could not resolve hostname"})
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
