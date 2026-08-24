@@ -1,14 +1,17 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import pickle
 import random
 import re
+import socket
 import string
 import subprocess
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
@@ -969,9 +972,23 @@ def ssrf_lab2(request):
     elif request.method == "POST":
         url = request.POST["url"]
         try:
+            parsed = urllib.parse.urlparse(url)
+            if parsed.scheme not in ("http", "https"):
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL scheme"})
+            hostname = parsed.hostname
+            if not hostname:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+            resolved = socket.getaddrinfo(hostname, None)
+            for result in resolved:
+                addr = result[4][0]
+                ip = ipaddress.ip_address(addr)
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                    return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "URL points to a restricted address"})
             response = requests.get(url)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+        except (ValueError, socket.gaierror):
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
