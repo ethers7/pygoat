@@ -413,6 +413,12 @@ def cmd(request):
         return redirect('login')
 @csrf_exempt
 def cmd_lab(request):
+    # Allowlist of permitted commands keyed by OS parameter value
+    ALLOWED_COMMANDS = {
+        'win': 'nslookup',
+        'linux': 'dig',
+    }
+
     if request.user.is_authenticated:
         if(request.method=="POST"):
             domain=request.POST.get('domain')
@@ -420,17 +426,23 @@ def cmd_lab(request):
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
             os=request.POST.get('os')
             print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
-            else:
-                command = "dig {}".format(domain)
-            
+
+            # Validate os parameter against allowlist
+            cmd_name = ALLOWED_COMMANDS.get(os)
+            if cmd_name is None:
+                output = "Invalid OS parameter"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+
+            # Validate domain: only allow valid hostname characters
+            if not re.match(r'^[a-zA-Z0-9._-]+$', domain):
+                output = "Invalid domain"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
                 process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
+                    [cmd_name, domain],
+                    shell=False,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
                 data = stdout.decode('utf-8')
