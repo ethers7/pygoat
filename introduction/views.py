@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 import os
-import pickle
 import random
 import re
 import shlex
@@ -26,7 +25,7 @@ from argon2 import PasswordHasher
 from django.contrib import messages
 from django.contrib.auth import authenticate, login
 from django.contrib.auth.forms import UserCreationForm
-from django.core import serializers
+from django.core import serializers, signing
 from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
 from django.template import loader
@@ -200,8 +199,7 @@ def insec_des(request):
 @dataclass
 class TestUser:
     admin: int = 0
-pickled_user = pickle.dumps(TestUser())
-encoded_user = base64.b64encode(pickled_user)
+encoded_user = signing.dumps({"admin": 0})
 
 def insec_des_lab(request):
     if request.user.is_authenticated:
@@ -209,11 +207,10 @@ def insec_des_lab(request):
         token = request.COOKIES.get('token')
         if token == None:
             token = encoded_user
-            response.set_cookie(key='token',value=token.decode('utf-8'))
+            response.set_cookie(key='token',value=token)
         else:
-            token = base64.b64decode(token)
-            admin = pickle.loads(token)
-            if admin.admin == 1:
+            admin = signing.loads(token)
+            if admin.get("admin") == 1:
                 response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Welcome Admin, SECRETKEY:ADMIN123"})
                 return response
 
@@ -572,7 +569,7 @@ def a9_lab(request):
             try :
                 file=request.FILES["file"]
                 try :
-                    data = yaml.load(file,yaml.Loader)
+                    data = yaml.safe_load(file)
                     
                     return render(request,"Lab/A9/a9_lab.html",{"data":data})
                 except:
