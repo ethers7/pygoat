@@ -7,7 +7,6 @@ import os
 import pickle
 import random
 import re
-import shlex
 import string
 import subprocess
 import uuid
@@ -419,25 +418,33 @@ def cmd_lab(request):
             domain=request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            os=request.POST.get('os')
-            print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
+
+            # Validate domain: only allow valid domain name characters
+            if not domain or not re.match(r'^[a-zA-Z0-9._-]+$', domain):
+                output = "Invalid domain. Only alphanumeric characters, dots, hyphens, and underscores are allowed."
+                return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
+
+            os_type = request.POST.get('os')
+            # Allowlist of permitted commands
+            allowed_commands = {'nslookup', 'dig'}
+            if os_type == 'win':
+                cmd_executable = 'nslookup'
             else:
-                command = "dig {}".format(domain)
-            
+                cmd_executable = 'dig'
+
+            if cmd_executable not in allowed_commands:
+                output = "Command not permitted."
+                return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
                 process = subprocess.Popen(
-                    shlex.split(command),
+                    [cmd_executable, domain],
                     shell=False,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
                 data = stdout.decode('utf-8')
                 stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
                 output = data + stderr
                 print(data + stderr)
             except:
