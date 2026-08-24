@@ -13,7 +13,7 @@ from hashlib import md5
 from io import BytesIO
 from random import randint
 from defusedxml.pulldom import parseString
-from xml.dom.pulldom import START_ELEMENT
+START_ELEMENT = 'START_ELEMENT'
 
 import jwt
 import requests
@@ -154,10 +154,7 @@ def sql_lab(request):
 
                 try:
                     print("\nin try\n")
-                    val = login.objects.raw(
-                        "SELECT * FROM introduction_login WHERE user=%s AND password=%s",
-                        [name, password]
-                    )
+                    val = login.objects.filter(user=name, password=password)
                 except:
                     print("\nin except\n")
                     return render(
@@ -863,11 +860,8 @@ def injection_sql_lab(request):
             sql_instance.save()
 
             try:
-                user = sql_lab_table.objects.raw(
-                    "SELECT * FROM introduction_sql_lab_table WHERE id=%s AND password=%s",
-                    [name, password]
-                )
-                user = user[0].id
+                user_qs = sql_lab_table.objects.filter(id=name, password=password)
+                user = user_qs[0].id if user_qs.exists() else None
                 print(user)
 
             except:
