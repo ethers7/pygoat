@@ -7,8 +7,7 @@ import os
 import random
 import re
 import string
-import shlex
-import subprocess
+import socket
 import uuid
 from hashlib import md5
 from io import BytesIO
@@ -404,34 +403,13 @@ def cmd_lab(request):
             if not re.match(r'^[a-zA-Z0-9._-]+$', domain):
                 output = "Invalid domain name"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
-            # Sanitize to break taint propagation after validation
-            safe_domain = shlex.quote(domain)
-            os=request.POST.get('os')
-            print(os)
-            # Allowlist of permitted commands
-            allowed_commands = {
-                'win': ['nslookup', safe_domain],
-                'linux': ['dig', safe_domain],
-            }
-            cmd_args = allowed_commands.get(os if os == 'win' else 'linux')
-            if cmd_args is None:
-                output = "Invalid OS selection"
-                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
-
             try:
-                process = subprocess.Popen(
-                    cmd_args,
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
-                output = data + stderr
-                print(data + stderr)
-            except:
+                results = socket.getaddrinfo(domain, None)
+                addresses = set(r[4][0] for r in results)
+                output = f"DNS lookup for {domain}:\n" + "\n".join(addresses)
+            except socket.gaierror as e:
+                output = f"DNS lookup failed: {e}"
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
