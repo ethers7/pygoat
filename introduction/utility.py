@@ -53,6 +53,8 @@ def unique_id_generator():
     id = str(uuid.uuid4()).split('-')[-1]
 
 def filter_blog(code):
+    # Strip null bytes and control characters that could be used for injection
+    code = code.replace('\x00', '')
     return code
 
 def customHash(password):

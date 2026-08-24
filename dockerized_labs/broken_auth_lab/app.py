@@ -1,11 +1,14 @@
 from flask import Flask, render_template, request, redirect, url_for, make_response, flash
+from flask_wtf.csrf import CSRFProtect
 import hashlib
 import json
+import os
 from datetime import datetime, timedelta
 import base64
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'  # Vulnerable: Hardcoded secret key
+csrf = CSRFProtect(app)
 
 # Vulnerable: Storing user data in memory
 users = {
@@ -46,9 +49,9 @@ def login():
         
         if remember_me:
             # Vulnerable: Insecure "Remember Me" implementation
-            response.set_cookie('session', session_token, max_age=30*24*60*60)
+            response.set_cookie('session', session_token, max_age=30*24*60*60, secure=True, httponly=True, samesite='Lax')
         else:
-            response.set_cookie('session', session_token)
+            response.set_cookie('session', session_token, secure=True, httponly=True, samesite='Lax')
             
         return response
     
@@ -83,7 +86,7 @@ def reset_password():
     for username, user_data in users.items():
         if user_data['email'] == email:
             # Vulnerable: Predictable token generation
-            token = hashlib.md5(f"{email}:{datetime.now()}".encode()).hexdigest()
+            token = hashlib.sha256(f"{email}:{datetime.now()}".encode()).hexdigest()
             password_reset_tokens[token] = username
             
             # In a real application, this would send an email
@@ -120,4 +123,7 @@ def dashboard():
     return redirect(url_for('lab'))
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)  # Vulnerable: Debug mode enabled in production 
+    host = os.environ.get('FLASK_HOST', '0.0.0.0')
+    port = int(os.environ.get('FLASK_PORT', '5000'))
+    debug = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
+    app.run(host=host, port=port, debug=debug) 
