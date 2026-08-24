@@ -1,15 +1,18 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import pickle
 import random
 import re
+import socket
 import string
 import subprocess
 import uuid
+from urllib.parse import urlparse, urlunparse
 from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
@@ -960,9 +963,43 @@ def ssrf_lab2(request):
     elif request.method == "POST":
         url = request.POST["url"]
         try:
-            response = requests.get(url)
-            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+            parsed = urlparse(url)
+            if parsed.scheme not in ("http", "https"):
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL scheme"})
+            hostname = parsed.hostname
+            if not hostname:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+            # Resolve hostname and validate all resolved IPs against an allowlist
+            resolved_ips = socket.getaddrinfo(hostname, parsed.port or 80, proto=socket.IPPROTO_TCP)
+            if not resolved_ips:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Could not resolve hostname"})
+            for result in resolved_ips:
+                addr = ipaddress.ip_address(result[4][0])
+                if addr.is_private or addr.is_loopback or addr.is_reserved or addr.is_link_local:
+                    return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Access to internal addresses is not allowed"})
+            # Use the resolved IP directly to prevent DNS rebinding (TOCTOU)
+            resolved_ip = resolved_ips[0][4][0]
+            port = parsed.port
+            if port:
+                netloc = "[{}]:{}".format(resolved_ip, port) if ":" in resolved_ip else "{}:{}".format(resolved_ip, port)
+            else:
+                netloc = "[{}]".format(resolved_ip) if ":" in resolved_ip else resolved_ip
+            safe_url = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, ""))
+            response = requests.get(
+                safe_url,
+                headers={"Host": hostname},
+                allow_redirects=False,
+                timeout=5,
+            )
+            # Limit response: only return text content, truncated
+            content_type = response.headers.get("Content-Type", "")
+            if "text" not in content_type and "json" not in content_type:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Non-text response type"})
+            body = response.text[:5000]
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": body})
+        except (socket.gaierror, socket.herror):
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Could not resolve hostname"})
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
