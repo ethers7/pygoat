@@ -7,6 +7,7 @@ import os
 import pickle
 import random
 import re
+import shlex
 import string
 import subprocess
 import uuid
@@ -430,7 +431,7 @@ def cmd_lab(request):
                 'linux': 'dig',
             }
             cmd_binary = ALLOWED_COMMANDS.get(os_choice, 'dig')
-            cmd_args = [cmd_binary, domain]
+            cmd_args = [cmd_binary, shlex.quote(domain)]
 
             try:
                 process = subprocess.Popen(
