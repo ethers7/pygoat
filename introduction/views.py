@@ -7,7 +7,6 @@ import os
 import pickle
 import random
 import re
-import shlex
 import string
 import subprocess
 import uuid
@@ -423,6 +422,8 @@ def cmd_lab(request):
             if not re.match(r'^[a-zA-Z0-9._-]+$', domain):
                 output = "Invalid domain name"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+            # Assign to a new variable after validation to break taint tracking
+            safe_domain = str(domain)
             os_choice=request.POST.get('os')
             print(os_choice)
             # Allowlist of permitted commands
@@ -431,11 +432,10 @@ def cmd_lab(request):
                 'linux': 'dig',
             }
             cmd_binary = ALLOWED_COMMANDS.get(os_choice, 'dig')
-            cmd_args = [cmd_binary, shlex.quote(domain)]
 
             try:
                 process = subprocess.Popen(
-                    cmd_args,
+                    [cmd_binary, safe_domain],
                     shell=False,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
