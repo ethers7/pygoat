@@ -94,3 +94,24 @@ class PlatformRegressionTests(TestCase):
         )
         self.assertEqual(r.status_code, 302)
         self.assertEqual(self.client.get("/").status_code, 200)
+
+    def test_cmd_lab_rejects_invalid_domain(self):
+        """Domains with shell metacharacters must be rejected."""
+        self.client.force_login(self.user)
+        for bad_domain in ("example.com; cat /etc/passwd", "$(whoami)", "`id`", "a|b"):
+            r = self.client.post(
+                reverse("Command Injection Lab"),
+                {"domain": bad_domain, "os": "linux"},
+            )
+            self.assertEqual(r.status_code, 200)
+            self.assertContains(r, "Invalid domain name")
+
+    def test_cmd_lab_accepts_valid_domain(self):
+        """A clean hostname must not be rejected by validation."""
+        self.client.force_login(self.user)
+        r = self.client.post(
+            reverse("Command Injection Lab"),
+            {"domain": "example.com", "os": "linux"},
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertNotContains(r, "Invalid domain name")

@@ -418,19 +418,24 @@ def cmd_lab(request):
             domain=request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            os=request.POST.get('os')
-            print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
+            # Validate domain: only allow valid hostname characters (letters, digits, dots, hyphens)
+            if not domain or not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?$', domain):
+                output = "Invalid domain name"
+                return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
+            os_choice = request.POST.get('os')
+            print(os_choice)
+            # Allowlist of permitted commands
+            allowed_commands = {'win': 'nslookup', 'linux': 'dig'}
+            if os_choice == 'win':
+                cmd_name = allowed_commands['win']
             else:
-                command = "dig {}".format(domain)
-            
+                cmd_name = allowed_commands['linux']
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
                 process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
+                    [cmd_name, domain],
+                    shell=False,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
                 data = stdout.decode('utf-8')
@@ -557,7 +562,7 @@ def a9_lab(request):
             try :
                 file=request.FILES["file"]
                 try :
-                    data = yaml.load(file,yaml.Loader)
+                    data = yaml.load(file, yaml.SafeLoader)
                     
                     return render(request,"Lab/A9/a9_lab.html",{"data":data})
                 except:
