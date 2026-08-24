@@ -1,14 +1,17 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
-import pickle
 import random
 import re
+import shlex
+import socket
 import string
 import subprocess
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
@@ -199,8 +202,8 @@ def insec_des(request):
 @dataclass
 class TestUser:
     admin: int = 0
-pickled_user = pickle.dumps(TestUser())
-encoded_user = base64.b64encode(pickled_user)
+default_user = json.dumps({"admin": 0})
+encoded_user = base64.b64encode(default_user.encode('utf-8'))
 
 def insec_des_lab(request):
     if request.user.is_authenticated:
@@ -211,8 +214,8 @@ def insec_des_lab(request):
             response.set_cookie(key='token',value=token.decode('utf-8'))
         else:
             token = base64.b64decode(token)
-            admin = pickle.loads(token)
-            if admin.admin == 1:
+            admin_data = json.loads(token)
+            if admin_data.get("admin") == 1:
                 response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Welcome Admin, SECRETKEY:ADMIN123"})
                 return response
 
@@ -418,25 +421,31 @@ def cmd_lab(request):
             domain=request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            os=request.POST.get('os')
-            print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
-            else:
-                command = "dig {}".format(domain)
-            
+            # Validate domain: only allow valid domain name characters
+            if not re.match(r'^[a-zA-Z0-9._-]+$', domain):
+                output = "Invalid domain name"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+            os_type=request.POST.get('os')
+            print(os_type)
+            # Sanitize domain for subprocess argv (shlex.quote is a no-op here
+            # since regex above guarantees only [a-zA-Z0-9._-] characters)
+            safe_domain = shlex.quote(domain)
+            # Allowlist of permitted commands (shell=False with argv list)
+            allowed_commands = {
+                'win': ['nslookup', safe_domain],
+                'linux': ['dig', safe_domain],
+            }
+            command = allowed_commands.get(os_type, ['dig', safe_domain])
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
                 process = subprocess.Popen(
                     command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
+                    shell=False,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
                 data = stdout.decode('utf-8')
                 stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
                 output = data + stderr
                 print(data + stderr)
             except:
@@ -557,7 +566,7 @@ def a9_lab(request):
             try :
                 file=request.FILES["file"]
                 try :
-                    data = yaml.load(file,yaml.Loader)
+                    data = yaml.safe_load(file)
                     
                     return render(request,"Lab/A9/a9_lab.html",{"data":data})
                 except:
@@ -960,9 +969,36 @@ def ssrf_lab2(request):
     elif request.method == "POST":
         url = request.POST["url"]
         try:
-            response = requests.get(url)
-            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+            parsed = urllib.parse.urlparse(url)
+            if parsed.scheme not in ("http", "https"):
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Only http and https schemes are allowed"})
+            hostname = parsed.hostname
+            if not hostname:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            resolved_ips = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)
+            if not resolved_ips:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Could not resolve hostname"})
+            # Validate ALL resolved IPs before making the request
+            for family, type_, proto, canonname, sockaddr in resolved_ips:
+                ip = ipaddress.ip_address(sockaddr[0])
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                    return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Access to internal addresses is not allowed"})
+            # Pin request to the first validated IP to avoid TOCTOU DNS rebinding
+            validated_ip = resolved_ips[0][4][0]
+            # Build a URL using the validated IP directly
+            safe_url = urllib.parse.urlunparse((
+                parsed.scheme,
+                validated_ip + ":" + str(port),
+                parsed.path or "/",
+                parsed.params,
+                parsed.query,
+                parsed.fragment,
+            ))
+            # Preserve the original Host header so the target server routes correctly
+            resp = requests.get(safe_url, headers={"Host": hostname}, timeout=5, allow_redirects=False)
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": resp.content.decode(errors="replace")})
+        except (socket.gaierror, ValueError, requests.RequestException):
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
