@@ -1,14 +1,18 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import pickle
 import random
 import re
+import shlex
+import socket
 import string
 import subprocess
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
@@ -413,33 +417,38 @@ def cmd(request):
         return redirect('login')
 @csrf_exempt
 def cmd_lab(request):
+    # Allowlist of permitted DNS lookup commands
+    ALLOWED_COMMANDS = {
+        'win': 'nslookup',
+        'linux': 'dig',
+    }
+
     if request.user.is_authenticated:
         if(request.method=="POST"):
             domain=request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            os=request.POST.get('os')
-            print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
-            else:
-                command = "dig {}".format(domain)
-            
+
+            # Validate domain: only allow valid domain name characters
+            if not domain or not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?$', domain):
+                output = "Invalid domain name"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
-                process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
-                output = data + stderr
-                print(data + stderr)
-            except:
+                results = socket.getaddrinfo(domain, None)
+                # Format output similar to nslookup/dig
+                lines = [f"DNS lookup for: {domain}", ""]
+                seen = set()
+                for family, socktype, proto, canonname, sockaddr in results:
+                    addr = sockaddr[0]
+                    if addr not in seen:
+                        seen.add(addr)
+                        family_name = "IPv6" if family == socket.AF_INET6 else "IPv4"
+                        lines.append(f"Address: {addr} ({family_name})")
+                output = "\n".join(lines)
+            except socket.gaierror as e:
+                output = f"DNS lookup failed: {e}"
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
@@ -959,11 +968,62 @@ def ssrf_lab2(request):
 
     elif request.method == "POST":
         url = request.POST["url"]
+
+        # Validate URL to prevent SSRF
         try:
-            response = requests.get(url)
-            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+            parsed = urllib.parse.urlparse(url)
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+
+        # Only allow http and https schemes
+        if parsed.scheme not in ("http", "https"):
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL scheme. Only http and https are allowed."})
+
+        hostname = parsed.hostname
+        if not hostname:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL: no hostname provided."})
+
+        # Resolve hostname and check if the IP is private/internal
+        try:
+            resolved_ip = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)[0][4][0]
+            ip_obj = ipaddress.ip_address(resolved_ip)
+        except (socket.gaierror, ValueError):
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL: unable to resolve hostname."})
+
+        if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_reserved:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Access to internal/private networks is not allowed."})
+
+        # Build a safe URL using the resolved IP to prevent DNS rebinding (TOCTOU)
+        port = parsed.port
+        if port:
+            safe_netloc = f"{resolved_ip}:{port}"
+        else:
+            safe_netloc = str(resolved_ip)
+
+        safe_url = urllib.parse.urlunparse((
+            parsed.scheme,
+            safe_netloc,
+            parsed.path or "/",
+            parsed.params,
+            parsed.query,
+            parsed.fragment,
+        ))
+
+        try:
+            response = requests.get(
+                safe_url,
+                headers={"Host": hostname},
+                timeout=5,
+                allow_redirects=False,
+                stream=True,
+            )
+            # Limit response size to 1 MB to prevent resource exhaustion
+            max_size = 1024 * 1024
+            content = response.content[:max_size]
+            safe_text = content.decode(errors="replace")
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": safe_text})
+        except Exception:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Unable to fetch the URL."})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
 def ssti(request):

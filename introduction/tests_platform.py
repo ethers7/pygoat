@@ -87,6 +87,19 @@ class PlatformRegressionTests(TestCase):
         )
         self.assertEqual(self.client.get("/").status_code, 200)
 
+    def test_cmd_lab_rejects_invalid_domain(self):
+        self.client.force_login(self.user)
+        # Command injection attempt must be rejected
+        r = self.client.post("/cmd_lab", {"domain": "example.com; cat /etc/passwd", "os": "linux"})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Invalid domain name")
+
+    def test_cmd_lab_rejects_empty_domain(self):
+        self.client.force_login(self.user)
+        r = self.client.post("/cmd_lab", {"domain": "", "os": "linux"})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Invalid domain name")
+
     def test_login_post(self):
         r = self.client.post(
             reverse("login"),
