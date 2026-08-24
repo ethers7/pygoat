@@ -421,10 +421,12 @@ def cmd_lab(request):
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             os=request.POST.get('os')
             print(os)
+            # Sanitize domain for subprocess use (defense-in-depth)
+            safe_domain = shlex.quote(domain)
             if(os=='win'):
-                cmd_args = ["nslookup", domain]
+                cmd_args = ["nslookup", safe_domain]
             else:
-                cmd_args = ["dig", domain]
+                cmd_args = ["dig", safe_domain]
 
             try:
                 process = subprocess.Popen(
