@@ -29,5 +29,14 @@ EXPOSE 8000
 
 
 RUN python3 /app/manage.py migrate
+
+# Create a non-root user and grant ownership of application files
+RUN adduser --disabled-password --gecos '' appuser \
+    && chown -R appuser:appuser /app
+
 WORKDIR /app
+
+# Run as non-root user
+USER appuser
+
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers","6", "pygoat.wsgi"]
