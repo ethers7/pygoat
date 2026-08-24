@@ -432,9 +432,10 @@ def cmd_lab(request):
             else:
                 cmd_binary = ALLOWED_COMMANDS['linux']
 
+            safe_domain = shlex.quote(domain)
             try:
                 process = subprocess.Popen(
-                    [cmd_binary, domain],
+                    [cmd_binary, safe_domain],
                     shell=False,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
