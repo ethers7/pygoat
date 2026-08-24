@@ -1,22 +1,24 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
-import pickle
 import random
 import re
+import socket
 import string
 import subprocess
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
 from random import randint
-from xml.dom.pulldom import START_ELEMENT, parseString
-from xml.sax import make_parser
-from xml.sax.handler import feature_external_ges
+from xml.dom.pulldom import START_ELEMENT
+
+from defusedxml.pulldom import parseString
 
 import jwt
 import requests
@@ -38,6 +40,41 @@ from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
 from .utility import customHash, filter_blog
+
+ALLOWED_SCHEMES = {"http", "https"}
+
+
+def _validate_url_for_ssrf(url):
+    """Validate a URL to prevent SSRF attacks.
+
+    Returns the validated URL string if safe, or None if the URL is potentially
+    dangerous (private/reserved IP, disallowed scheme, etc.).
+    """
+    parsed = urllib.parse.urlparse(url)
+
+    # Only allow http and https schemes
+    if parsed.scheme not in ALLOWED_SCHEMES:
+        return None
+
+    hostname = parsed.hostname
+    if not hostname:
+        return None
+
+    # Resolve hostname to IP and check against private/reserved ranges
+    try:
+        resolved_ip = socket.getaddrinfo(hostname, None, socket.AF_INET)[0][4][0]
+    except (socket.gaierror, IndexError):
+        return None
+
+    ip_obj = ipaddress.ip_address(resolved_ip)
+
+    # Block private, reserved, loopback, and link-local addresses
+    if (ip_obj.is_private or ip_obj.is_reserved or ip_obj.is_loopback
+            or ip_obj.is_link_local or ip_obj.is_multicast):
+        return None
+
+    return url
+
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -199,19 +236,19 @@ def insec_des(request):
 @dataclass
 class TestUser:
     admin: int = 0
-pickled_user = pickle.dumps(TestUser())
-encoded_user = base64.b64encode(pickled_user)
+default_user_json = base64.b64encode(json.dumps({"admin": 0}).encode('utf-8'))
 
 def insec_des_lab(request):
     if request.user.is_authenticated:
         response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Only Admins can see this page"})
         token = request.COOKIES.get('token')
         if token == None:
-            token = encoded_user
+            token = default_user_json
             response.set_cookie(key='token',value=token.decode('utf-8'))
         else:
             token = base64.b64decode(token)
-            admin = pickle.loads(token)
+            user_data = json.loads(token)
+            admin = TestUser(admin=int(user_data.get("admin", 0)))
             if admin.admin == 1:
                 response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Welcome Admin, SECRETKEY:ADMIN123"})
                 return response
@@ -255,9 +292,7 @@ def xxe_see(request):
 @csrf_exempt
 def xxe_parse(request):
 
-    parser = make_parser()
-    parser.setFeature(feature_external_ges, True)
-    doc = parseString(request.body.decode('utf-8'), parser=parser)
+    doc = parseString(request.body.decode('utf-8'))
     for event, node in doc:
         if event == START_ELEMENT and node.tagName == 'text':
             doc.expandNode(node)
@@ -415,31 +450,38 @@ def cmd(request):
 def cmd_lab(request):
     if request.user.is_authenticated:
         if(request.method=="POST"):
-            domain=request.POST.get('domain')
+            domain=request.POST.get('domain', '')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
-            os=request.POST.get('os')
-            print(os)
-            if(os=='win'):
-                command="nslookup {}".format(domain)
-            else:
-                command = "dig {}".format(domain)
-            
+            # Strip trailing slashes and path components
+            domain = domain.split('/')[0]
+            # Validate domain: only allow valid hostname characters
+            # (letters, digits, hyphens, dots) and reject empty or flag-like input
+            if not domain or not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?$', domain):
+                output = "Invalid domain name"
+                return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
+            os_type = request.POST.get('os', '')
+            # Allowlist: only permit known lookup commands
+            allowed_commands = {'win': 'nslookup', 'linux': 'dig'}
+            lookup_cmd = allowed_commands.get(os_type, 'dig')
+            command = [lookup_cmd, domain]
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
                 process = subprocess.Popen(
                     command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
+                    shell=False,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
+                stdout, stderr = process.communicate(timeout=30)
                 data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
-                output = data + stderr
-                print(data + stderr)
-            except:
+                stderr_output = stderr.decode('utf-8')
+                output = data + stderr_output
+                print(output)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                output = "Command timed out"
+                return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
@@ -557,7 +599,7 @@ def a9_lab(request):
             try :
                 file=request.FILES["file"]
                 try :
-                    data = yaml.load(file,yaml.Loader)
+                    data = yaml.safe_load(file)
                     
                     return render(request,"Lab/A9/a9_lab.html",{"data":data})
                 except:
@@ -959,10 +1001,13 @@ def ssrf_lab2(request):
 
     elif request.method == "POST":
         url = request.POST["url"]
+        validated_url = _validate_url_for_ssrf(url)
+        if validated_url is None:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid or disallowed URL"})
         try:
-            response = requests.get(url)
+            response = requests.get(validated_url)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
