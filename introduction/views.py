@@ -4,19 +4,16 @@ import hashlib
 import json
 import logging
 import os
-import pickle
 import random
 import re
 import string
 import subprocess
 import uuid
-from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
 from random import randint
-from xml.dom.pulldom import START_ELEMENT, parseString
-from xml.sax import make_parser
-from xml.sax.handler import feature_external_ges
+from defusedxml.pulldom import parseString
+START_ELEMENT = 'START_ELEMENT'
 
 import jwt
 import requests
@@ -155,19 +152,17 @@ def sql_lab(request):
 
             if login.objects.filter(user=name):
 
-                sql_query = "SELECT * FROM introduction_login WHERE user='"+name+"' AND password='"+password+"'"
-                print(sql_query)
                 try:
                     print("\nin try\n")
-                    val=login.objects.raw(sql_query)
+                    val = login.objects.filter(user=name, password=password)
                 except:
                     print("\nin except\n")
                     return render(
-                        request, 
+                        request,
                         'Lab/SQL/sql_lab.html',
                         {
                             "wrongpass":password,
-                            "sql_error":sql_query
+                            "sql_error":"Invalid query"
                         })
 
                 if val:
@@ -175,11 +170,11 @@ def sql_lab(request):
                     return render(request, 'Lab/SQL/sql_lab.html',{"user1":user})
                 else:
                     return render(
-                        request, 
+                        request,
                         'Lab/SQL/sql_lab.html',
                         {
                             "wrongpass":password,
-                            "sql_error":sql_query
+                            "sql_error":"Invalid query"
                         })
             else:
                 return render(request, 'Lab/SQL/sql_lab.html',{"no": "User not found"})
@@ -196,11 +191,7 @@ def insec_des(request):
     else:
         return redirect('login')
 
-@dataclass
-class TestUser:
-    admin: int = 0
-pickled_user = pickle.dumps(TestUser())
-encoded_user = base64.b64encode(pickled_user)
+encoded_user = base64.b64encode(json.dumps({"admin": 0}).encode())
 
 def insec_des_lab(request):
     if request.user.is_authenticated:
@@ -211,8 +202,8 @@ def insec_des_lab(request):
             response.set_cookie(key='token',value=token.decode('utf-8'))
         else:
             token = base64.b64decode(token)
-            admin = pickle.loads(token)
-            if admin.admin == 1:
+            admin_data = json.loads(token)
+            if admin_data.get("admin") == 1:
                 response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Welcome Admin, SECRETKEY:ADMIN123"})
                 return response
 
@@ -255,9 +246,7 @@ def xxe_see(request):
 @csrf_exempt
 def xxe_parse(request):
 
-    parser = make_parser()
-    parser.setFeature(feature_external_ges, True)
-    doc = parseString(request.body.decode('utf-8'), parser=parser)
+    doc = parseString(request.body.decode('utf-8'))
     for event, node in doc:
         if event == START_ELEMENT and node.tagName == 'text':
             doc.expandNode(node)
@@ -557,7 +546,7 @@ def a9_lab(request):
             try :
                 file=request.FILES["file"]
                 try :
-                    data = yaml.load(file,yaml.Loader)
+                    data = yaml.safe_load(file)
                     
                     return render(request,"Lab/A9/a9_lab.html",{"data":data})
                 except:
@@ -861,8 +850,6 @@ def injection_sql_lab(request):
         print(password)
 
         if name:
-            sql_query = "SELECT * FROM introduction_sql_lab_table WHERE id='"+name+"'AND password='"+password+"'"
-
             sql_instance = sql_lab_table(id="admin", password="65079b006e85a7e798abecb99e47c154")
             sql_instance.save()
             sql_instance = sql_lab_table(id="jack", password="jack")
@@ -872,31 +859,29 @@ def injection_sql_lab(request):
             sql_instance = sql_lab_table(id="bloke", password="f8d1ce191319ea8f4d1d26e65e130dd5")
             sql_instance.save()
 
-            print(sql_query)
-
             try:
-                user = sql_lab_table.objects.raw(sql_query)
-                user = user[0].id
+                user_qs = sql_lab_table.objects.filter(id=name, password=password)
+                user = user_qs[0].id if user_qs.exists() else None
                 print(user)
 
             except:
                 return render(
-                    request, 
+                    request,
                     'Lab_2021/A3_Injection/sql_lab.html',
                     {
                         "wrongpass":password,
-                        "sql_error":sql_query
+                        "sql_error":"Invalid query"
                     })
 
             if user:
                 return render(request, 'Lab_2021/A3_Injection/sql_lab.html',{"user1":user})
             else:
                 return render(
-                    request, 
+                    request,
                     'Lab_2021/A3_Injection/sql_lab.html',
                     {
                         "wrongpass":password,
-                        "sql_error":sql_query
+                        "sql_error":"Invalid query"
                     })
         else:
             return render(request, 'Lab_2021/A3_Injection/sql_lab.html')
