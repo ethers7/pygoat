@@ -419,25 +419,13 @@ def cmd_lab(request):
             if not domain or not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?$', domain):
                 output = "Invalid domain name"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
-            os=request.POST.get('os')
-            print(os)
-            ALLOWED_COMMANDS = {"win": "nslookup", "linux": "dig"}
-            cmd_name = ALLOWED_COMMANDS.get(os, "dig")
             try:
-                resolved = socket.gethostbyname(domain)
-                process = subprocess.Popen(
-                    [cmd_name, resolved],
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
-                output = data + stderr
-                print(data + stderr)
-            except:
+                results = socket.getaddrinfo(domain, None)
+                addresses = sorted(set(addr[4][0] for addr in results))
+                output = f"DNS lookup for {domain}:\n" + "\n".join(addresses)
+            except socket.gaierror:
+                output = f"Could not resolve domain: {domain}"
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
