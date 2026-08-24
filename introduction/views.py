@@ -8,7 +8,6 @@ import os
 import pickle
 import random
 import re
-import shlex
 import socket
 import string
 import subprocess
@@ -426,29 +425,21 @@ def cmd_lab(request):
             if not re.match(r'^[a-zA-Z0-9._-]+$', domain):
                 output = "Invalid domain name"
                 return render(request, 'Lab/CMD/cmd_lab.html', {"output": output})
-            os=request.POST.get('os')
-            print(os)
-            # Sanitize validated domain for safe subprocess use
-            safe_domain = shlex.quote(domain)
+            os_type = request.POST.get('os')
+            print(os_type)
             # Command allowlist: only nslookup or dig are permitted
-            ALLOWED_COMMANDS = {"win": "nslookup", "unix": "dig"}
-            cmd_name = ALLOWED_COMMANDS.get("win" if os == "win" else "unix")
-            cmd_args = shlex.split(f"{cmd_name} {safe_domain}")
-
             try:
-                process = subprocess.Popen(
-                    cmd_args,
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
-                output = data + stderr
-                print(data + stderr)
-            except:
+                if os_type == 'win':
+                    result = subprocess.run(
+                        ["nslookup", domain],
+                        capture_output=True, text=True, timeout=30)
+                else:
+                    result = subprocess.run(
+                        ["dig", domain],
+                        capture_output=True, text=True, timeout=30)
+                output = result.stdout + result.stderr
+                print(output)
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
