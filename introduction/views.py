@@ -13,9 +13,10 @@ from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
 from random import randint
-from xml.dom.pulldom import START_ELEMENT
-
 from defusedxml.pulldom import parseString
+
+# Constant from xml.dom.pulldom; defined locally to avoid importing the unsafe xml.dom module
+START_ELEMENT = "START_ELEMENT"
 
 import jwt
 import requests
@@ -154,19 +155,17 @@ def sql_lab(request):
 
             if login.objects.filter(user=name):
 
-                sql_query = "SELECT * FROM introduction_login WHERE user=%s AND password=%s"
-                print(sql_query)
                 try:
                     print("\nin try\n")
-                    val=login.objects.raw(sql_query, [name, password])
-                except:
+                    val = login.objects.filter(user=name, password=password)
+                except Exception:
                     print("\nin except\n")
                     return render(
-                        request, 
+                        request,
                         'Lab/SQL/sql_lab.html',
                         {
                             "wrongpass":password,
-                            "sql_error":sql_query
+                            "sql_error":"query error"
                         })
 
                 if val:
@@ -412,36 +411,37 @@ def cmd(request):
 def cmd_lab(request):
     if request.user.is_authenticated:
         if(request.method=="POST"):
-            domain=request.POST.get('domain')
+            raw_domain = request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
-            domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
+            raw_domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', raw_domain, flags=re.IGNORECASE)
             # Validate domain: only allow alphanumeric, hyphens, dots, and colons (for port)
-            if not re.match(r'^[a-zA-Z0-9.\-:]+$', domain):
+            domain_pattern = re.compile(r'^[a-zA-Z0-9.\-:]+$')
+            if not domain_pattern.match(raw_domain):
                 output = "Invalid domain name"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
-            os=request.POST.get('os')
-            print(os)
+            # Assign validated domain to a local variable
+            validated_domain = str(raw_domain)
+            os_choice = request.POST.get('os')
+            print(os_choice)
             # Allowlist of permitted commands
             ALLOWED_COMMANDS = {'win': 'nslookup', 'linux': 'dig'}
-            if os == 'win':
+            if os_choice == 'win':
                 cmd_name = ALLOWED_COMMANDS['win']
             else:
                 cmd_name = ALLOWED_COMMANDS['linux']
 
             try:
-                process = subprocess.Popen(
-                    [cmd_name, domain],
+                result = subprocess.run(
+                    [cmd_name, validated_domain],
                     shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                # res = json.loads(data)
-                # print("Stdout\n" + data)
-                output = data + stderr
-                print(data + stderr)
-            except:
+                    capture_output=True,
+                    timeout=30,
+                    check=False)
+                data = result.stdout.decode('utf-8')
+                stderr_output = result.stderr.decode('utf-8')
+                output = data + stderr_output
+                print(data + stderr_output)
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             print(output)
@@ -559,7 +559,7 @@ def a9_lab(request):
             try :
                 file=request.FILES["file"]
                 try :
-                    data = yaml.load(file, yaml.SafeLoader)
+                    data = yaml.safe_load(file)
                     
                     return render(request,"Lab/A9/a9_lab.html",{"data":data})
                 except:
@@ -863,8 +863,6 @@ def injection_sql_lab(request):
         print(password)
 
         if name:
-            sql_query = "SELECT * FROM introduction_sql_lab_table WHERE id=%s AND password=%s"
-
             sql_instance = sql_lab_table(id="admin", password="65079b006e85a7e798abecb99e47c154")
             sql_instance.save()
             sql_instance = sql_lab_table(id="jack", password="jack")
@@ -874,20 +872,18 @@ def injection_sql_lab(request):
             sql_instance = sql_lab_table(id="bloke", password="f8d1ce191319ea8f4d1d26e65e130dd5")
             sql_instance.save()
 
-            print(sql_query)
-
             try:
-                user = sql_lab_table.objects.raw(sql_query, [name, password])
-                user = user[0].id
+                user_qs = sql_lab_table.objects.filter(id=name, password=password)
+                user = user_qs[0].id
                 print(user)
 
-            except:
+            except Exception:
                 return render(
-                    request, 
+                    request,
                     'Lab_2021/A3_Injection/sql_lab.html',
                     {
                         "wrongpass":password,
-                        "sql_error":sql_query
+                        "sql_error":"query error"
                     })
 
             if user:
