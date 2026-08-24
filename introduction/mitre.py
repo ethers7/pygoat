@@ -172,7 +172,7 @@ def csrf_lab_login(request):
             }
             cookie = jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
             response = redirect("/mitre/9/lab/transaction")
-            response.set_cookie('auth_cookiee', cookie)
+            response.set_cookie('auth_cookiee', cookie, secure=True, httponly=True, samesite='Lax')
             return response
         else :
             return redirect('/mitre/9/lab/login')
