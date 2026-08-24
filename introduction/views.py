@@ -1,14 +1,17 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import pickle
 import random
 import re
+import socket
 import string
 import subprocess
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from hashlib import md5
@@ -964,17 +967,65 @@ def ssrf_target(request):
     else:
         return render(request,"Lab/ssrf/ssrf_target.html",{"access_denied":True})
 
+_SSRF_ALLOWED_SCHEMES = {"http", "https"}
+_SSRF_MAX_RESPONSE_LENGTH = 4096
+
+
+def _is_safe_url_for_ssrf(url):
+    """Validate a URL against SSRF attacks.
+
+    Returns the validated URL string if safe, or None if blocked.
+    Checks scheme, resolves hostname to IP, and rejects private/internal addresses.
+    """
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except Exception:
+        return None
+
+    if parsed.scheme not in _SSRF_ALLOWED_SCHEMES:
+        return None
+
+    hostname = parsed.hostname
+    if not hostname:
+        return None
+
+    try:
+        resolved_ip = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except (socket.gaierror, OSError):
+        return None
+
+    if not resolved_ip:
+        return None
+
+    for family, _type, _proto, _canonname, sockaddr in resolved_ip:
+        ip_str = sockaddr[0]
+        try:
+            ip_obj = ipaddress.ip_address(ip_str)
+        except ValueError:
+            return None
+
+        if (ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local
+                or ip_obj.is_reserved or ip_obj.is_multicast):
+            return None
+
+    return url
+
+
 @authentication_decorator
 def ssrf_lab2(request):
     if request.method == "GET":
         return render(request, "Lab/ssrf/ssrf_lab2.html")
 
     elif request.method == "POST":
-        url = request.POST["url"]
+        url = request.POST.get("url", "")
+        validated_url = _is_safe_url_for_ssrf(url)
+        if validated_url is None:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "URL not allowed"})
         try:
-            response = requests.get(url)
-            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+            response = requests.get(validated_url, timeout=5, allow_redirects=False)
+            content = response.text[:_SSRF_MAX_RESPONSE_LENGTH]
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": content})
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
