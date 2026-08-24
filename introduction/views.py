@@ -8,10 +8,8 @@ import os
 import pickle
 import random
 import re
-import shlex
 import socket
 import string
-import subprocess
 import uuid
 from urllib.parse import urlparse, urlunparse
 from dataclasses import dataclass
@@ -417,11 +415,6 @@ def cmd(request):
         return redirect('login')
 @csrf_exempt
 def cmd_lab(request):
-    # Allowlist of permitted commands for DNS lookup
-    ALLOWED_COMMANDS = {
-        'win': '/usr/bin/nslookup',
-        'linux': '/usr/bin/dig',
-    }
     # Strict hostname/IP validation: only alphanumeric, dots, hyphens, colons (IPv6)
     VALID_DOMAIN_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9.\-:]{0,253}[a-zA-Z0-9]$')
 
@@ -438,33 +431,23 @@ def cmd_lab(request):
                 output = "Invalid domain name. Only alphanumeric characters, dots, and hyphens are allowed."
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
-            os_type=request.POST.get('os', '')
-            print(os_type)
-
-            # Use allowlist to select command; default to dig
-            if os_type == 'win':
-                cmd_key = 'win'
-            else:
-                cmd_key = 'linux'
-
-            cmd_path = ALLOWED_COMMANDS[cmd_key]
-            cmd_args = [cmd_path, shlex.quote(domain)]
-
             try:
-                process = subprocess.Popen(
-                    cmd_args,
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                output = data + stderr
-                print(data + stderr)
-            except:
+                # Use Python's socket module for DNS resolution instead of subprocess
+                results = socket.getaddrinfo(domain, None)
+                # Deduplicate resolved addresses while preserving order
+                seen = set()
+                addresses = []
+                for r in results:
+                    addr = r[4][0]
+                    if addr not in seen:
+                        seen.add(addr)
+                        addresses.append(addr)
+                output = "DNS resolution for {}:\n{}".format(domain, "\n".join(addresses))
+            except socket.gaierror as e:
+                output = "DNS lookup failed for {}: {}".format(domain, str(e))
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
-            print(output)
             return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
         else:
             return render(request, 'Lab/CMD/cmd_lab.html')
