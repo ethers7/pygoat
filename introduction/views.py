@@ -956,20 +956,31 @@ def ssrf_lab2(request):
         return render(request, "Lab/ssrf/ssrf_lab2.html")
 
     elif request.method == "POST":
-        url = request.POST["url"]
+        user_url = request.POST["url"]
         try:
-            parsed = urlparse(url)
+            parsed = urlparse(user_url)
             if parsed.scheme not in ("http", "https"):
                 return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Only http and https schemes are allowed"})
             hostname = parsed.hostname
             if not hostname:
                 return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
             resolved_ip = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            first_ip = None
             for family, socktype, proto, canonname, sockaddr in resolved_ip:
                 ip = ipaddress.ip_address(sockaddr[0])
                 if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
                     return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Requests to private/internal addresses are not allowed"})
-            response = requests.get(url, timeout=5)
+                if first_ip is None:
+                    first_ip = sockaddr[0]
+            scheme = parsed.scheme
+            port = parsed.port
+            path = parsed.path or "/"
+            query = ("?" + parsed.query) if parsed.query else ""
+            if port:
+                safe_url = f"{scheme}://{first_ip}:{port}{path}{query}"
+            else:
+                safe_url = f"{scheme}://{first_ip}{path}{query}"
+            response = requests.get(safe_url, headers={"Host": hostname}, timeout=5)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
         except (socket.gaierror, socket.herror):
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Could not resolve hostname"})
