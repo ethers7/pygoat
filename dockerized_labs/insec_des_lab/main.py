@@ -1,6 +1,7 @@
 import os
 
 from flask import Flask, render_template, request, make_response
+from flask_wtf.csrf import CSRFProtect
 import json
 import base64
 import hmac
@@ -9,6 +10,7 @@ from dataclasses import dataclass
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'change-this-to-a-strong-random-secret')
+csrf = CSRFProtect(app)
 
 HMAC_KEY = app.secret_key.encode()
 

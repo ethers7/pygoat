@@ -11,6 +11,7 @@
         <div class="section">
             <h4>Login</h4>
             <form method="POST" action="/login">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="text" name="username" placeholder="Username" required>
                 <input type="password" name="password" placeholder="Password" required>
                 <div style="margin: 10px 0;">
@@ -27,6 +28,7 @@
         <div class="section">
             <h4>Register</h4>
             <form method="POST" action="/register">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="text" name="username" placeholder="Username" required>
                 <input type="email" name="email" placeholder="Email" required>
                 <input type="password" name="password" placeholder="Password" required>
@@ -38,6 +40,7 @@
         <div id="resetForm" class="section" style="display: none;">
             <h4>Reset Password</h4>
             <form method="POST" action="/reset-password">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="email" name="email" placeholder="Email" required>
                 <button type="submit">Send Reset Link</button>
             </form>

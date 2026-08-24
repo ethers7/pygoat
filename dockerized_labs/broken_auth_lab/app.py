@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, redirect, url_for, make_response, flash
+from flask_wtf.csrf import CSRFProtect
 import hashlib
 import json
 from datetime import datetime, timedelta
@@ -6,6 +7,7 @@ import base64
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'  # Vulnerable: Hardcoded secret key
+csrf = CSRFProtect(app)
 
 # Vulnerable: Storing user data in memory
 users = {
