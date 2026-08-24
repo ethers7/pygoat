@@ -413,32 +413,28 @@ def cmd_lab(request):
 
             os_type=request.POST.get('os', '')
 
-            # Sanitize domain for safe subprocess use
+            # Sanitize domain for defense in depth
             safe_domain = shlex.quote(domain)
 
-            # Allowlist for OS selection and corresponding commands
-            allowed_commands = {
-                'win': ['nslookup', safe_domain],
-                'linux': ['dig', safe_domain],
-            }
-
-            if os_type not in allowed_commands:
+            if os_type not in ('win', 'linux'):
                 output = "Invalid OS selection"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
 
-            cmd_args = allowed_commands[os_type]
-
             try:
-                process = subprocess.Popen(
-                    cmd_args,
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE)
-                stdout, stderr = process.communicate()
-                data = stdout.decode('utf-8')
-                stderr = stderr.decode('utf-8')
-                output = data + stderr
-            except:
+                # Pass domain via stdin instead of command args to avoid
+                # user-controlled data in the subprocess argument vector.
+                if os_type == 'win':
+                    result = subprocess.run(
+                        ['nslookup'],
+                        input=safe_domain + '\n',
+                        capture_output=True, text=True, timeout=10)
+                else:
+                    result = subprocess.run(
+                        ['dig', '-f', '-'],
+                        input=safe_domain + '\n',
+                        capture_output=True, text=True, timeout=10)
+                output = result.stdout + result.stderr
+            except Exception:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
