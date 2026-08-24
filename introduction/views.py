@@ -1,15 +1,18 @@
 import base64
 import datetime
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import pickle
 import random
 import re
+import socket
 import string
 import subprocess
 import uuid
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
@@ -952,6 +955,32 @@ def ssrf_target(request):
     else:
         return render(request,"Lab/ssrf/ssrf_target.html",{"access_denied":True})
 
+SSRF_ALLOWED_SCHEMES = {"http", "https"}
+
+
+def _validate_url_for_ssrf(url):
+    """Validate a URL to prevent SSRF attacks.
+
+    Returns the validated URL string or raises ValueError.
+    Blocks private, loopback, link-local, and reserved IP ranges.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in SSRF_ALLOWED_SCHEMES:
+        raise ValueError("Scheme not allowed")
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("No hostname")
+    try:
+        addrinfos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except socket.gaierror:
+        raise ValueError("Cannot resolve hostname")
+    for family, stype, proto, canonname, sockaddr in addrinfos:
+        ip_obj = ipaddress.ip_address(sockaddr[0])
+        if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_reserved:
+            raise ValueError("Blocked IP range")
+    return url
+
+
 @authentication_decorator
 def ssrf_lab2(request):
     if request.method == "GET":
@@ -960,9 +989,12 @@ def ssrf_lab2(request):
     elif request.method == "POST":
         url = request.POST["url"]
         try:
-            response = requests.get(url)
+            validated_url = _validate_url_for_ssrf(url)
+            response = requests.get(validated_url, allow_redirects=False, timeout=5)
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+        except ValueError:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+        except Exception:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
