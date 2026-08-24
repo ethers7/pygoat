@@ -15,8 +15,6 @@ stderr = stderr.decode('utf-8')
 # print("Stdout\n" + data)
 print(data + stderr)
 '''
-import subprocess
-
 import yaml
 
 stream = open('/home/fox/test.yaml', 'r')

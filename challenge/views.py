@@ -47,8 +47,8 @@ class DoItFast(View):
         if port == None:
             return JsonResponse({'message': 'failed', 'status': '500', 'endpoint': 'None'})
         
-        command = f"docker run -d -p {port}:{chal.docker_port} {chal.docker_image}"
-        process = subprocess.Popen(command.split(" "), stdout=subprocess.PIPE)
+        command = ["docker", "run", "-d", "-p", f"{port}:{chal.docker_port}", str(chal.docker_image)]
+        process = subprocess.Popen(command, stdout=subprocess.PIPE)
         output, error = process.communicate()
         container_id = output.decode('utf-8').strip()
         
