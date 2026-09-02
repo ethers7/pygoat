@@ -23,7 +23,8 @@ from .playground.A6.utility import check_vuln
 from .utility import (FETCH_TIMEOUT, MAX_FETCH_RESPONSE_BYTES,
                       MAX_STORED_TEXT_LENGTH, InvalidStoredTextError,
                       ResponseTooLargeError, UnsafeExpressionError,
-                      read_bounded_response, safe_arithmetic_eval,
+                      UnsafePathError, read_bounded_response,
+                      safe_arithmetic_eval, safe_contained_path,
                       safe_fetch_url, safe_host_target, safe_python_source,
                       safe_stored_text)
 
@@ -656,6 +657,73 @@ class PlatformRegressionTests(TestCase):
         path = blogs_dir / f"{blog.blog_id}.html"
         self.assertIn("blog/" + blog.blog_id, r["Location"])
         self.assertIn("my safe blog body", path.read_text())
+
+    def test_safe_contained_path_accepts_a_lab_blog(self):
+        """The blog reader still resolves the paths its own form submits."""
+        blogs_dir = APP_DIR / "templates" / "Lab" / "ssrf" / "blogs"
+        for name in ("blog1.txt", "blog2.txt", "blog3.txt", "blog4.txt"):
+            self.assertEqual(
+                safe_contained_path(
+                    APP_DIR,
+                    f"templates/Lab/ssrf/blogs/{name}",
+                    allowed_dir=blogs_dir,
+                    allowed_suffixes=(".txt",),
+                ),
+                str(blogs_dir / name),
+                msg=name,
+            )
+
+    def test_safe_contained_path_rejects_escapes(self):
+        """CWE-22 regression: nothing outside the blogs directory resolves."""
+        blogs_dir = APP_DIR / "templates" / "Lab" / "ssrf" / "blogs"
+        for payload in (
+            None,
+            42,
+            "",
+            "   ",
+            "../../etc/passwd",
+            "/etc/passwd",
+            "templates/Lab/ssrf/blogs/../../../../../../etc/passwd",
+            "templates/Lab/ssrf/blogs/../secret.txt",
+            "templates/Lab/ssrf/secret.txt",
+            "views.py",
+            "templates\\Lab\\ssrf\\blogs\\blog1.txt",
+            "templates/Lab/ssrf/blogs/blog1.txt\x00",
+            "templates/Lab/ssrf/blogs",
+        ):
+            with self.assertRaises(UnsafePathError, msg=repr(payload)):
+                safe_contained_path(
+                    APP_DIR,
+                    payload,
+                    allowed_dir=blogs_dir,
+                    allowed_suffixes=(".txt",),
+                )
+
+    def test_ssrf_lab_still_serves_a_lab_blog(self):
+        """The lab keeps reading the blog its form asks for."""
+        self.client.force_login(self.user)
+        r = self.client.post(
+            "/ssrf_lab", {"blog": "templates/Lab/ssrf/blogs/blog1.txt"}
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Overview")
+
+    def test_ssrf_lab_rejects_path_traversal(self):
+        """CWE-22 regression: request paths never escape the blogs directory."""
+        self.client.force_login(self.user)
+        for payload in (
+            "../../etc/passwd",
+            "/etc/passwd",
+            "templates/Lab/ssrf/blogs/../../../../../../etc/passwd",
+            "templates/Lab/ssrf/secret.txt",
+            "views.py",
+        ):
+            r = self.client.post("/ssrf_lab", {"blog": payload})
+            self.assertEqual(r.status_code, 200, msg=payload)
+            self.assertContains(
+                r, "Invalid blog selection", msg_prefix=payload
+            )
+            self.assertNotContains(r, "root:", msg_prefix=payload)
 
     def test_csrf_lab_login(self):
         """The CSRF lab still issues its JWT cookie for valid credentials only."""
