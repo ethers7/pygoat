@@ -1,0 +1,19 @@
+{% extends 'introduction/base.html' %}
+{% block title %}
+<title>SSTI-Blogs</title>
+{% endblock %}
+{% block content %}
+<div class="container">
+    {% if blog %}
+    <h3>{{ blog_id }}</h3>
+    <div class="blog-body" style="white-space: pre-wrap;">{{ blog }}</div>
+    {% else %}
+    <div class="alert alert-danger" role="alert">
+        No blog found for {{ blog_id }}
+    </div>
+    {% endif %}
+    <div style="position : fixed ; right : 7px; bottom : 7px">
+        <button class="btn btn-info" type="button" onclick="window.location.href='/ssti/lab'">Back to Lab</button>
+    </div>
+</div>
+{% endblock %}
