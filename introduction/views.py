@@ -30,13 +30,18 @@ from django.template import loader
 from PIL import Image, ImageMath
 from requests.structures import CaseInsensitiveDict
 
+from pygoat.settings import LAB_COOKIE_SECURE
+
 from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits,
                      verify_lab_password)
-from .utility import (MAX_FETCH_REDIRECTS, UnsafeExpressionError, customHash,
-                      fetch_allowed_hosts, filter_blog, safe_arithmetic_eval,
-                      safe_fetch_url, safe_host_target)
+from .utility import (FETCH_TIMEOUT, MAX_FETCH_REDIRECTS,
+                      InvalidStoredTextError, ResponseTooLargeError,
+                      UnsafeExpressionError, UnsafePathError, customHash,
+                      fetch_allowed_hosts, filter_blog, read_bounded_response,
+                      safe_arithmetic_eval, safe_contained_path,
+                      safe_fetch_url, safe_host_target, safe_stored_text)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -231,7 +236,18 @@ def insec_des_lab(request):
         response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Only Admins can see this page"})
         token = request.COOKIES.get('token')
         if token == None:
-            response.set_cookie(key='token',value=signed_user)
+            # CWE-614/CWE-1004: the token is only read back by this view, so it is
+            # kept out of reach of page scripts (HttpOnly), is not attached to
+            # cross-site requests (SameSite=Lax) and is marked Secure whenever the
+            # app is served over HTTPS (PYGOAT_HTTPS). The lab is still solved by
+            # editing the cookie in the browser dev tools or an intercepting proxy.
+            response.set_cookie(
+                key='token',
+                value=signed_user,
+                httponly=True,
+                samesite='Lax',
+                secure=LAB_COOKIE_SECURE,
+            )
         else:
             try:
                 admin = load_user(token)
@@ -326,7 +342,19 @@ def auth_lab_signup(request):
                 # the user-supplied values, instead of handing pre-rendered
                 # markup to HttpResponse.
                 response = render(request, 'Lab/AUTH/auth_success.html', {'username': obj.username,'userid':obj.userid,'name':obj.name,'err_msg':'Cookie Set'})
-                response.set_cookie('userid', obj.userid, max_age=31449600, samesite=None, secure=False)
+                # CWE-614/CWE-1004: the identifier is only consumed server side, so
+                # it is hidden from page scripts, is not sent on cross-site requests
+                # and travels over TLS only whenever PYGOAT_HTTPS is set. Swapping
+                # the value in the dev tools still demonstrates the broken
+                # authentication the lab teaches.
+                response.set_cookie(
+                    'userid',
+                    obj.userid,
+                    max_age=31449600,
+                    httponly=True,
+                    samesite='Lax',
+                    secure=LAB_COOKIE_SECURE,
+                )
                 print('Setting cookie successful')
                 return response
             except:
@@ -341,7 +369,15 @@ def auth_lab_login(request):
             # CWE-79: render through Django's template response so untrusted
             # values are auto-escaped for the HTML context.
             response = render(request, 'Lab/AUTH/auth_success.html', {'username': obj.username,'userid':obj.userid,'name':obj.name, 'err_msg':'Login Successful'})
-            response.set_cookie('userid', obj.userid, max_age=31449600, samesite=None, secure=False)
+            # CWE-614/CWE-1004: same cookie, same attributes as the signup path.
+            response.set_cookie(
+                'userid',
+                obj.userid,
+                max_age=31449600,
+                httponly=True,
+                samesite='Lax',
+                secure=LAB_COOKIE_SECURE,
+            )
             print('Login successful')
             return response
         except:
@@ -356,7 +392,15 @@ def auth_lab_login(request):
                 # CWE-79: render through Django's template response so untrusted
                 # values are auto-escaped for the HTML context.
                 response = render(request, 'Lab/AUTH/auth_success.html', {'username': obj.username,'userid':obj.userid,'name':obj.name, 'err_msg':'Login Successful'})
-                response.set_cookie('userid', obj.userid, max_age=31449600, samesite=None, secure=False)
+                # CWE-614/CWE-1004: same cookie, same attributes as the signup path.
+                response.set_cookie(
+                    'userid',
+                    obj.userid,
+                    max_age=31449600,
+                    httponly=True,
+                    samesite='Lax',
+                    secure=LAB_COOKIE_SECURE,
+                )
                 print('Login successful')
                 return response
             except:
@@ -399,7 +443,18 @@ def ba_lab(request):
                         "data":"0NLY_F0R_4DM1N5",
                         "username": "admin"
                     })
-                html.set_cookie("admin", "1",max_age=200)
+                # CWE-614/CWE-1004: the role flag is only checked server side, so it
+                # is not exposed to page scripts, not replayed on cross-site
+                # requests, and only sent over TLS when PYGOAT_HTTPS is set. The lab
+                # is still solved by flipping the value in the browser dev tools.
+                html.set_cookie(
+                    "admin",
+                    "1",
+                    max_age=200,
+                    httponly=True,
+                    samesite="Lax",
+                    secure=LAB_COOKIE_SECURE,
+                )
                 return html
             elif login.objects.filter(user=name,password=password):
                 html = render(
@@ -409,7 +464,15 @@ def ba_lab(request):
                     "not_admin":"No Secret key for this User",
                     "username": name
                 })
-                html.set_cookie("admin", "0",max_age=200)
+                # CWE-614/CWE-1004: see the admin branch above.
+                html.set_cookie(
+                    "admin",
+                    "0",
+                    max_age=200,
+                    httponly=True,
+                    samesite="Lax",
+                    secure=LAB_COOKIE_SECURE,
+                )
                 return html
             else:
                 return render(request, 'Lab/BrokenAccess/ba_lab.html', {"data": "User Not Found"})
@@ -540,13 +603,30 @@ def Otp(request):
             if email=="admin@pygoat.com":
                 otp.objects.filter(id=2).update(otp=otpN)
                 html = render(request, "Lab/BrokenAuth/otp.html", {"otp":"Sent To Admin Mail ID"})
-                html.set_cookie("email", email)
+                # CWE-614/CWE-1004: the address is read back from request.COOKIES by
+                # this view only, so it stays script-inaccessible, is not attached to
+                # cross-site requests and is Secure when PYGOAT_HTTPS is set. The OTP
+                # lab is still solved by editing the cookie in the dev tools.
+                html.set_cookie(
+                    "email",
+                    email,
+                    httponly=True,
+                    samesite="Lax",
+                    secure=LAB_COOKIE_SECURE,
+                )
                 return html
 
             else:
                 otp.objects.filter(id=1).update(email=email, otp=otpN)
                 html=render (request,"Lab/BrokenAuth/otp.html",{"otp":otpN})
-                html.set_cookie("email",email)
+                # CWE-614/CWE-1004: see the admin-mail branch above.
+                html.set_cookie(
+                    "email",
+                    email,
+                    httponly=True,
+                    samesite="Lax",
+                    secure=LAB_COOKIE_SECURE,
+                )
                 return html
         else:
             return render(request,"Lab/BrokenAuth/otp.html")
@@ -811,7 +891,18 @@ def a1_broken_access_lab_1(request):
                 "not_admin":"No Secret key for this User",
                 "username": name
             })
-            html.set_cookie("admin", "0",max_age=200)
+            # CWE-614/CWE-1004: the role flag is only checked server side, so it is
+            # kept away from page scripts, is not replayed on cross-site requests and
+            # is Secure whenever PYGOAT_HTTPS is set. Flipping the value in the
+            # browser dev tools still solves the lab.
+            html.set_cookie(
+                "admin",
+                "0",
+                max_age=200,
+                httponly=True,
+                samesite="Lax",
+                secure=LAB_COOKIE_SECURE,
+            )
             return html
         else:
             return render(request, 'Lab_2021/A1_BrokenAccessControl/broken_access_lab_1.html', {"data": "User Not Found"})
@@ -947,6 +1038,11 @@ def injection_sql_lab(request):
 
 #*********************************************************SSRF*************************************************#
 
+# The only directory the SSRF blog reader is meant to serve, relative to this
+# app package. Every request supplied blog path has to resolve inside it.
+SSRF_BLOG_DIR = os.path.join("templates", "Lab", "ssrf", "blogs")
+
+
 def ssrf(request):
     if request.user.is_authenticated:
         return render(request,"Lab/ssrf/ssrf.html")
@@ -959,13 +1055,29 @@ def ssrf_lab(request):
             return render(request,"Lab/ssrf/ssrf_lab.html",{"blog":"Read Blog About SSRF"})
         else:
             file=request.POST["blog"]
+            # CWE-22: the request chooses which blog to display, so the path is
+            # resolved and required to stay inside the lab blogs directory
+            # before anything is opened. Traversal segments, absolute paths and
+            # any target outside that directory are refused with an error
+            # instead of being read from disk.
+            dirname = os.path.dirname(__file__)
+            try:
+                filename = safe_contained_path(
+                    dirname,
+                    file,
+                    allowed_dir=os.path.join(dirname, SSRF_BLOG_DIR),
+                    allowed_suffixes=('.txt',),
+                )
+            except UnsafePathError as error:
+                return render(
+                    request,
+                    "Lab/ssrf/ssrf_lab.html",
+                    {"blog": f"Invalid blog selection: {error}"})
             try :
-                dirname = os.path.dirname(__file__)
-                filename = os.path.join(dirname, file)
-                file = open(filename,"r")
-                data = file.read()
+                with open(filename, "r") as blog_file:
+                    data = blog_file.read()
                 return render(request,"Lab/ssrf/ssrf_lab.html",{"blog":data})
-            except:
+            except OSError:
                 return render(request, "Lab/ssrf/ssrf_lab.html", {"blog": "No blog found"})
     else:
         return redirect('login')
@@ -1007,11 +1119,21 @@ def ssrf_lab2(request):
                          + ", ".join(allowed_hosts),
                 "allowed_hosts": allowed_hosts,
             })
+        # Uncontrolled resource consumption (CWE-400): every hop carries a
+        # (connect, read) timeout, the hop count is bounded and the body is
+        # streamed through read_bounded_response so the remote host cannot
+        # decide how long the worker waits or how much memory it buffers.
         try:
             for _ in range(MAX_FETCH_REDIRECTS + 1):
-                response = requests.get(target, timeout=10, allow_redirects=False)
+                response = requests.get(
+                    target,
+                    timeout=FETCH_TIMEOUT,
+                    allow_redirects=False,
+                    stream=True,
+                )
                 if not response.is_redirect:
                     break
+                response.close()
                 target = safe_fetch_url(urljoin(target, response.headers.get("Location", "")))
                 if target is None:
                     return render(request, "Lab/ssrf/ssrf_lab2.html", {
@@ -1022,13 +1144,24 @@ def ssrf_lab2(request):
                 return render(request, "Lab/ssrf/ssrf_lab2.html", {
                     "error": "Too many redirects", "allowed_hosts": allowed_hosts})
             return render(request, "Lab/ssrf/ssrf_lab2.html", {
-                "response": response.content.decode(errors="replace"),
+                "response": read_bounded_response(response).decode(errors="replace"),
                 "allowed_hosts": allowed_hosts,
             })
+        except ResponseTooLargeError:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {
+                "error": "That destination returned more data than this lab will display",
+                "allowed_hosts": allowed_hosts})
         except requests.RequestException:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {
                 "error": "Invalid URL", "allowed_hosts": allowed_hosts})
 #--------------------------------------- Server-side template injection --------------------------------------#
+
+# Where the blog lab keeps each submitted body, relative to this app package.
+# Bodies are stored as plain data files and rendered through a template with
+# autoescaping, so nothing in here is ever compiled as a template or trusted as
+# markup.
+SSTI_BLOG_DIR = os.path.join("templates", "Lab_2021", "A3_Injection", "Blogs")
+
 
 def ssti(request):
     if request.user.is_authenticated:
@@ -1042,23 +1175,33 @@ def ssti_lab(request):
             users_blogs = Blogs.objects.filter(author=request.user)
             return render(request,"Lab_2021/A3_Injection/ssti_lab.html", {"blogs":users_blogs})
         elif request.method=="POST":
-            blog = request.POST["blog"]
+            # CWE-915: the blog body is persisted on disk, so it is validated at
+            # this boundary (present, bounded, control character free,
+            # normalised line endings) and reported back as an error before any
+            # row or file is created.
+            try:
+                blog = safe_stored_text(request.POST.get("blog"), field="blog")
+            except InvalidStoredTextError as error:
+                return render(
+                    request,
+                    "Lab_2021/A3_Injection/ssti_lab.html",
+                    {
+                        "blogs": Blogs.objects.filter(author=request.user),
+                        "error": str(error),
+                    })
             id = str(uuid.uuid4()).split('-')[-1]
 
             blog = filter_blog(blog)
-            prepend_code = "{% extends 'introduction/base.html' %}\
-                {% block content %}{% block title %}\
-                <title>SSTI-Blogs</title>\
-                {% endblock %}"
-            
-            blog = prepend_code + blog + "{% endblock %}"
+            # CWE-79: the body is stored as plain text and handed to a template
+            # as context when it is displayed, instead of being concatenated
+            # into HTML/template source. The request never contributes markup or
+            # template code, so ssti_view_blog can auto-escape what it renders.
             new_blog = Blogs.objects.create(author = request.user, blog_id = id)
-            new_blog.save() 
+            new_blog.save()
             dirname = os.path.dirname(__file__)
-            filename = os.path.join(dirname, f"templates/Lab_2021/A3_Injection/Blogs/{id}.html")
-            file = open(filename, "w+") 
-            file.write(blog)
-            file.close()
+            filename = os.path.join(dirname, SSTI_BLOG_DIR, f"{id}.txt")
+            with open(filename, "w", encoding="utf-8") as blog_file:
+                blog_file.write(blog)
             return redirect(f'blog/{id}')
     else:
         return redirect('login')
@@ -1067,7 +1210,27 @@ def ssti_lab(request):
 def ssti_view_blog(request,blog_id):
     if request.user.is_authenticated:
         if request.method=="GET":
-            return render(request,f"Lab_2021/A3_Injection/Blogs/{blog_id}.html")
+            # CWE-22: the blog id arrives in the URL, so the stored body is
+            # resolved and required to stay inside the lab blog directory before
+            # it is opened; anything else is reported as a missing blog.
+            blogs_dir = os.path.join(os.path.dirname(__file__), SSTI_BLOG_DIR)
+            try:
+                filename = safe_contained_path(
+                    blogs_dir,
+                    f"{blog_id}.txt",
+                    allowed_dir=blogs_dir,
+                    allowed_suffixes=('.txt',),
+                )
+                with open(filename, "r", encoding="utf-8") as blog_file:
+                    blog = blog_file.read()
+            except (UnsafePathError, OSError, UnicodeDecodeError):
+                blog = None
+            # CWE-79: the stored body is passed as template context, so the
+            # template engine escapes it for the HTML context on the way out.
+            return render(
+                request,
+                "Lab_2021/A3_Injection/ssti_blog.html",
+                {"blog_id": blog_id, "blog": blog})
         elif request.method=="POST":
             return HttpResponseBadRequest()
 
@@ -1142,12 +1305,31 @@ def crypto_failure_lab3(request):
                     expire = datetime.datetime.now() + datetime.timedelta(minutes=60)
                     cookie = f"{username}|{expire}"
                     response = render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab3.html",{"success":True, "failure":False , "admin":False})
-                    response.set_cookie("cookie", cookie)
+                    # CWE-614/CWE-1004: this lab is about a cookie that carries its
+                    # own authorisation data, so at minimum it must not leak to page
+                    # scripts, must not ride along on cross-site requests, and must
+                    # not cross the network in clear text once PYGOAT_HTTPS is set.
+                    # The value is unchanged, so tampering with it in the dev tools or
+                    # a proxy still demonstrates the flaw.
+                    response.set_cookie(
+                        "cookie",
+                        cookie,
+                        httponly=True,
+                        samesite="Lax",
+                        secure=LAB_COOKIE_SECURE,
+                    )
                     response.status_code = 200
                     return response
                 else:
                     response = render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab3.html",{"success":False, "failure":True})
-                    response.set_cookie("cookie", None)
+                    # CWE-614/CWE-1004: see the success branch above.
+                    response.set_cookie(
+                        "cookie",
+                        None,
+                        httponly=True,
+                        samesite="Lax",
+                        secure=LAB_COOKIE_SECURE,
+                    )
                     return response
             except:
                 return render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab2.html",{"success":False, "failure":True})
@@ -1175,7 +1357,17 @@ def sec_misconfig_lab3(request):
 
         cookie = jwt.encode(payload, SECRET_COOKIE_KEY, algorithm='HS256')
         response = render(request,"Lab/sec_mis/sec_mis_lab3.html", {"admin":False} )
-        response.set_cookie(key = "auth_cookie", value = cookie)
+        # CWE-614/CWE-1004: the JWT is only decoded server side, so it is hidden from
+        # page scripts, is not attached to cross-site requests, and is Secure once
+        # PYGOAT_HTTPS is set. The lab is still solved by re-signing or swapping the
+        # token in an intercepting proxy.
+        response.set_cookie(
+            key="auth_cookie",
+            value=cookie,
+            httponly=True,
+            samesite="Lax",
+            secure=LAB_COOKIE_SECURE,
+        )
         return response
 
 # - ------------------------Identification and Authentication Failures--------------------------------
@@ -1262,14 +1454,31 @@ def auth_failure_lab3(request):
             password = hashlib.sha256(password.encode()).hexdigest()
         except:
             response = render(request, "Lab_2021/A7_auth_failure/lab3.html")
-            response.set_cookie("session_id", None)
+            # CWE-614/CWE-1004: the session identifier is looked up server side only,
+            # so it is not readable by page scripts, is not sent on cross-site
+            # requests and is Secure once PYGOAT_HTTPS is set. Guessing or replaying
+            # the identifier through a proxy still demonstrates the lab.
+            response.set_cookie(
+                "session_id",
+                None,
+                httponly=True,
+                samesite="Lax",
+                secure=LAB_COOKIE_SECURE,
+            )
             return response
 
         if USER_A7_LAB3[username]['password'] == password:
             session_data = AF_session_id.objects.create(session_id=token, user=USER_A7_LAB3[username]['username'])
             session_data.save()
             response = render(request, "Lab_2021/A7_auth_failure/lab3.html", {"success":True, "failure":False, "username":username})
-            response.set_cookie("session_id", token)
+            # CWE-614/CWE-1004: see the failure branch above.
+            response.set_cookie(
+                "session_id",
+                token,
+                httponly=True,
+                samesite="Lax",
+                secure=LAB_COOKIE_SECURE,
+            )
             return response
 
 #-- coding playground for lab2

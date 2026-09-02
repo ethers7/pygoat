@@ -138,6 +138,43 @@ def safe_fetch_url(value):
     return urlunsplit((scheme, host, parsed.path, parsed.query, ''))
 
 
+# Outbound fetches are bounded in time and in size (CWE-400): a slow or
+# endless upstream response must not pin a worker or be buffered into memory
+# without limit. FETCH_TIMEOUT is the (connect, read) pair every outbound
+# request passes as timeout=, and MAX_FETCH_RESPONSE_BYTES caps how much of a
+# streamed body the server will ever hold.
+FETCH_TIMEOUT = (5, 10)
+MAX_FETCH_RESPONSE_BYTES = 1024 * 1024
+_FETCH_CHUNK_BYTES = 8192
+
+
+class ResponseTooLargeError(ValueError):
+    """Raised when an upstream response is larger than the server will buffer."""
+
+
+def read_bounded_response(response, max_bytes=MAX_FETCH_RESPONSE_BYTES):
+    """Buffer at most ``max_bytes`` of an outbound response body (CWE-400).
+
+    Callers issue the request with ``stream=True`` so the body arrives in
+    chunks; as soon as the cap is exceeded the connection is closed and
+    :class:`ResponseTooLargeError` is raised instead of reading an unbounded
+    amount of remote data into memory. Returns the body as bytes.
+    """
+    body = bytearray()
+    try:
+        for chunk in response.iter_content(_FETCH_CHUNK_BYTES):
+            if not chunk:
+                continue
+            body.extend(chunk)
+            if len(body) > max_bytes:
+                raise ResponseTooLargeError(
+                    f'response is larger than the {max_bytes} byte limit'
+                )
+    finally:
+        response.close()
+    return bytes(body)
+
+
 # Arithmetic-only expression evaluator for the calculator labs (CWE-94/95).
 # Untrusted input is parsed with ast.parse(mode='eval') and then interpreted
 # against the explicit node/operator allowlist below, so it is never handed to
@@ -231,6 +268,114 @@ def safe_arithmetic_eval(expression):
     if sum(1 for _ in ast.walk(tree)) > MAX_EXPRESSION_NODES:
         raise UnsafeExpressionError('expression is too complex')
     return _eval_expression_node(tree.body)
+
+
+# Validation for request data that a view persists (CWE-915). Values that
+# arrive on a request and are then written to a store (a file on disk for these
+# labs) are normalised and bounded here first: callers persist what these
+# helpers return, never the raw request field, and report the raised message
+# instead of writing unchecked input.
+MAX_STORED_TEXT_LENGTH = 8000
+MAX_STORED_SOURCE_LENGTH = 20000
+
+# Tab and newline are the only control characters stored text may contain;
+# anything else means smuggled binary or terminal escape sequences.
+_CONTROL_CHAR_RE = re.compile(r'[\x00-\x08\x0b-\x1f\x7f-\x9f]')
+
+
+class InvalidStoredTextError(ValueError):
+    """Raised when untrusted text is not acceptable to persist."""
+
+
+def safe_stored_text(value, field='value', max_length=MAX_STORED_TEXT_LENGTH):
+    """Validate and normalise untrusted text before it is written to a store.
+
+    Checks the type (a string), presence, an upper length bound and the absence
+    of control characters, and normalises line endings so what gets stored is
+    exactly what was validated. Raises :class:`InvalidStoredTextError` with a
+    reportable message otherwise, so callers fail closed with an error response
+    instead of persisting unchecked request data.
+    """
+    if not isinstance(value, str):
+        raise InvalidStoredTextError(f'{field} is required')
+    text = value.replace('\r\n', '\n').replace('\r', '\n').strip()
+    if not text:
+        raise InvalidStoredTextError(f'{field} is required')
+    if len(text) > max_length:
+        raise InvalidStoredTextError(
+            f'{field} is longer than the {max_length} character limit'
+        )
+    if _CONTROL_CHAR_RE.search(text):
+        raise InvalidStoredTextError(
+            f'{field} contains unsupported control characters'
+        )
+    return text
+
+
+def safe_python_source(value, field='code', max_length=MAX_STORED_SOURCE_LENGTH):
+    """Validate untrusted Python source before it replaces a module on disk.
+
+    The lab code checkers overwrite a module with whatever was submitted, so the
+    payload must be a bounded, control character free string that parses as
+    Python (``ast.parse`` only builds a syntax tree, it never runs the code)
+    before anything is written. Returns the normalised source, or raises
+    :class:`InvalidStoredTextError` so the caller can answer with an error.
+    """
+    source = safe_stored_text(value, field=field, max_length=max_length)
+    try:
+        ast.parse(source)
+    except (SyntaxError, ValueError, MemoryError, RecursionError):
+        raise InvalidStoredTextError(f'{field} is not valid Python source')
+    return source
+
+
+# Containment check for request supplied file paths (CWE-22). A view that lets
+# the request choose which file to read must resolve the candidate and prove it
+# stays inside the directory the lab is meant to serve, otherwise `../`
+# segments, a symlink or an absolute path walk out of that directory and expose
+# arbitrary files. Callers open only what this helper returns, never the raw
+# request value, and report the raised message instead.
+class UnsafePathError(ValueError):
+    """Raised when a request supplied path escapes its allowed directory."""
+
+
+def safe_contained_path(base_dir, candidate, allowed_dir=None, allowed_suffixes=None):
+    """Resolve an untrusted relative path and keep it inside a directory.
+
+    ``candidate`` must be a relative path with no ``..`` segment; it is joined
+    onto ``base_dir``, fully resolved (so symlinks cannot point out either) and
+    then required to sit inside ``allowed_dir`` (``base_dir`` when it is not
+    given) and, when ``allowed_suffixes`` is set, to carry one of those
+    extensions. Returns the absolute path that is safe to open, or raises
+    :class:`UnsafePathError` so callers fail closed with an error response.
+    """
+    if not isinstance(candidate, str):
+        raise UnsafePathError('a file name is required')
+    relative = candidate.strip()
+    if not relative:
+        raise UnsafePathError('a file name is required')
+    if '\x00' in relative:
+        raise UnsafePathError('file name contains an unsupported character')
+    # Backslash is a separator on Windows and an ordinary character elsewhere;
+    # refusing it keeps this check identical on every platform.
+    if '\\' in relative:
+        raise UnsafePathError('file name may not contain a backslash')
+    if os.path.isabs(relative) or relative.startswith('/'):
+        raise UnsafePathError('an absolute path is not allowed')
+    if os.pardir in relative.split('/'):
+        raise UnsafePathError('a path outside the allowed directory is not allowed')
+
+    root = os.path.realpath(base_dir if allowed_dir is None else allowed_dir)
+    resolved = os.path.realpath(os.path.join(base_dir, relative))
+    try:
+        contained = os.path.commonpath([root, resolved]) == root
+    except ValueError:
+        contained = False
+    if not contained or resolved == root:
+        raise UnsafePathError('a path outside the allowed directory is not allowed')
+    if allowed_suffixes and os.path.splitext(resolved)[1].lower() not in allowed_suffixes:
+        raise UnsafePathError('that file type is not allowed')
+    return resolved
 
 
 def ssrf_code_converter(code):
