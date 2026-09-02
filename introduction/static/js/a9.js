@@ -15,10 +15,13 @@ event3 = function(){
     var target_code = document.getElementById('a9_api').value
 
     var myHeaders = new Headers();
-    myHeaders.append("Cookie", "csrftoken=5fVOTXh2HNahtvJFJNRSrKkwPAgPM9YCHlrCGprAxhAAKOUWMxqMnWm8BUomv0Yd; jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MSwiZXhwIjoxNjUzMzEzMDIxLCJpYXQiOjE2NTMzMDk0MjF9.dh2gfP9wKD8GKu1J-jVs2jJUYMgKu_kMaJjrD0hHP-I");
+    // Do not hard-code session credentials (jwt / csrftoken) here: the browser
+    // attaches the caller's own cookies to this same-origin request, and
+    // "Cookie" is a forbidden header name that fetch() ignores anyway. The CSRF
+    // token is read at call time from the page (see static/js/csrf.js).
+    myHeaders.append("X-CSRFToken", pygoatCSRFToken());
 
     var formdata = new FormData();
-    formdata.append("csrfmiddlewaretoken", "5fVOTXh2HNahtvJFJNRSrKkwPAgPM9YCHlrCGprAxhAAKOUWMxqMnWm8BUomv0Yd");
     formdata.append("log_code", log_code);
     formdata.append("api_code", target_code);
 
@@ -35,11 +38,22 @@ event3 = function(){
         let data = JSON.parse(result);  // parse JSON string into object
         console.log(data.logs);
         document.getElementById("a9_d3").style.display = 'flex';
-        for (var i = 0; i < data.logs.length; i++) {
-            var li = document.createElement("li");
-            li.innerHTML = data.logs[i];
-            document.getElementById("a9_d3").appendChild(li);
+        if (!data.logs) {
+            // The API validates the submitted modules and answers with a
+            // message instead of the logs when the input is rejected.
+            document.getElementById("a9_d3").innerText = data.message;
+            return;
         }
+        // Iterate the values the API returned instead of reading them back by
+        // computed index, so nothing from the response is used as a property
+        // key. Array.isArray keeps the old "render nothing" behaviour when the
+        // response is not the expected JSON list.
+        var logs = Array.isArray(data.logs) ? data.logs : [];
+        logs.forEach(function(log) {
+            var li = document.createElement("li");
+            li.innerHTML = log;
+            document.getElementById("a9_d3").appendChild(li);
+        });
     })
     .catch(error => console.log('error', error));
     }

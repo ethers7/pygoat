@@ -10,7 +10,6 @@ This is a deliberately vulnerable web application that demonstrates common authe
 4. Vulnerable "Remember Me" Functionality
 5. Predictable Password Reset Tokens
 6. No Brute Force Protection
-7. Debug Mode Enabled in Production
 
 ## Setup Instructions
 
@@ -27,6 +26,26 @@ This is a deliberately vulnerable web application that demonstrates common authe
    docker-compose up --build
    ```
 4. Access the lab at http://localhost:5000
+
+### Configuration
+
+- `BROKEN_AUTH_LAB_CSRF_KEY` - key used to sign CSRF tokens. When unset, a
+  random per-process key is generated, so tokens from earlier runs stop working.
+- `BROKEN_AUTH_LAB_HTTPS=1` - set when the lab is fronted with TLS so the
+  session and CSRF cookies are also marked `Secure`.
+- `BROKEN_AUTH_LAB_HOST` - address the development server binds when the app is
+  started with `python app.py`. It defaults to `127.0.0.1`, so a direct run is
+  reachable only from the machine itself. The container image sets it to
+  `0.0.0.0` because a process inside a container must bind a container-visible
+  address for the published port to work, so `docker-compose up --build` still
+  serves the lab on http://localhost:5000. Only set it to `0.0.0.0` outside a
+  container if you accept exposing this deliberately vulnerable app to your
+  network.
+- `BROKEN_AUTH_LAB_DEBUG=1` - opt in to Flask's debug mode (reloader plus the
+  Werkzeug interactive debugger). It is **off by default**: the debugger is a
+  remote code execution console for anyone who can reach port 5000, so only
+  enable it on a local, non-shared run. Leaving it unset does not change how
+  the lab is started or exercised.
 
 ### Default Credentials
 

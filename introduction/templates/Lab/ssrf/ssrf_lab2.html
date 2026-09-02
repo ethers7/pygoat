@@ -14,7 +14,10 @@
         {% csrf_token %}
         <div class="form-group">
             <label for="url">URL</label>
-            <input type="text" class="form-control" id="url" name="url" placeholder="Enter URL">
+            <input type="text" class="form-control" id="url" name="url" placeholder="https://example.com/">
+            {% if allowed_hosts %}
+            <small class="form-text">Allowed hosts: {{ allowed_hosts|join:", " }} (http/https, default port only)</small>
+            {% endif %}
             <button type="submit" class="btn btn-primary">Submit</button>
         </div>
     </form>
@@ -31,15 +34,24 @@
    <code>   
     @authentication_decorator<br>
 def ssrf_lab2(request):<br>
+&emsp;allowed_hosts = sorted(fetch_allowed_hosts())<br>
 &emsp;if request.method == "GET":<br>
-&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html")<br>
+&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"allowed_hosts": allowed_hosts})<br>
 <br>
 &emsp;elif request.method == "POST":<br>
-&emsp;&emsp;url = request.POST["url"]<br>
+&emsp;&emsp;# only fetch an allowlisted http(s) host that resolves to a public address<br>
+&emsp;&emsp;target = safe_fetch_url(request.POST.get("url"))<br>
+&emsp;&emsp;if target is None:<br>
+&emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "URL not allowed. ..."})<br>
 &emsp;&emsp;try:<br>
-&emsp;&emsp;&emsp;response = requests.get(url)<br>
-&emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})<br>
-&emsp;&emsp;except:<br>
+&emsp;&emsp;&emsp;# redirects are re-validated with safe_fetch_url, never followed blindly<br>
+&emsp;&emsp;&emsp;# and the fetch is bounded in time and size, never unlimited<br>
+&emsp;&emsp;&emsp;response = requests.get(target, timeout=FETCH_TIMEOUT, allow_redirects=False, stream=True)<br>
+&emsp;&emsp;&emsp;body = read_bounded_response(response)&nbsp;&nbsp;# at most MAX_FETCH_RESPONSE_BYTES<br>
+&emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": body.decode(errors="replace")})<br>
+&emsp;&emsp;except ResponseTooLargeError:<br>
+&emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Response too large"})<br>
+&emsp;&emsp;except requests.RequestException:<br>
 &emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})<br>
    </code>
     

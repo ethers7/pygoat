@@ -1,14 +1,16 @@
 import datetime
 import re
 import subprocess
-from hashlib import md5
 
 import jwt
 from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
-from django.views.decorators.csrf import csrf_exempt
 
-from .models import CSRF_user_tbl
+from pygoat.settings import CSRF_LAB_JWT_KEY, LAB_COOKIE_SECURE
+
+from .models import CSRF_user_tbl, verify_lab_password
+from .utility import (UnsafeExpressionError, safe_arithmetic_eval,
+                      safe_host_target)
 from .views import authentication_decorator
 
 # import os
@@ -158,28 +160,41 @@ def csrf_lab_login(request):
     elif request.method == 'POST':
         password = request.POST.get('password')
         username = request.POST.get('username')
-        password = md5(password.encode()).hexdigest()
-        User = CSRF_user_tbl.objects.filter(username=username, password=password)
-        if User:
+        # CWE-327: the submitted password is verified against the stored PBKDF2
+        # hash with Django's configured hashers instead of being matched as an
+        # unsalted MD5 digest.
+        user = CSRF_user_tbl.objects.filter(username=username).first()
+        if user is not None and verify_lab_password(password, user.password):
             payload ={
                 'username': username,
                 'exp': datetime.datetime.utcnow() + datetime.timedelta(seconds=300),
                 'iat': datetime.datetime.utcnow()
             }
-            cookie = jwt.encode(payload, 'csrf_vulneribility', algorithm='HS256')
+            cookie = jwt.encode(payload, CSRF_LAB_JWT_KEY, algorithm='HS256')
             response = redirect("/mitre/9/lab/transaction")
-            response.set_cookie('auth_cookiee', cookie)
+            # CWE-614/CWE-1004: the session JWT is only decoded server side, so it is
+            # kept out of reach of page scripts and out of clear-text traffic once
+            # PYGOAT_HTTPS is set. SameSite=Lax is what browsers already default to
+            # for a cookie with no SameSite attribute, and the lab's transfer is a
+            # top-level GET navigation (see templates/mitre/csrf_dashboard.html),
+            # which Lax still sends, so the CSRF exercise keeps working.
+            response.set_cookie(
+                'auth_cookiee',
+                cookie,
+                httponly=True,
+                samesite='Lax',
+                secure=LAB_COOKIE_SECURE,
+            )
             return response
         else :
             return redirect('/mitre/9/lab/login')
 
 @authentication_decorator
-@csrf_exempt
 def csrf_transfer_monei(request):
     if request.method == 'GET':
         try:
             cookie = request.COOKIES['auth_cookiee']
-            payload = jwt.decode(cookie, 'csrf_vulneribility', algorithms=['HS256'])
+            payload = jwt.decode(cookie, CSRF_LAB_JWT_KEY, algorithms=['HS256'])
             username = payload['username']
             User = CSRF_user_tbl.objects.filter(username=username)
             if not User:
@@ -191,7 +206,7 @@ def csrf_transfer_monei(request):
 def csrf_transfer_monei_api(request,recipent,amount):
     if request.method == "GET":
         cookie = request.COOKIES['auth_cookiee']
-        payload = jwt.decode(cookie, 'csrf_vulneribility', algorithms=['HS256'])
+        payload = jwt.decode(cookie, CSRF_LAB_JWT_KEY, algorithms=['HS256'])
         username = payload['username']
         User = CSRF_user_tbl.objects.filter(username=username)
         if not User:
@@ -211,11 +226,17 @@ def csrf_transfer_monei_api(request,recipent,amount):
 
 
 # @authentication_decorator
-@csrf_exempt
 def mitre_lab_25_api(request):
     if request.method == "POST":
         expression = request.POST.get('expression')
-        result = eval(expression)
+        # Calculator lab: the submitted expression is still evaluated, but only
+        # as bounded arithmetic. Request data never reaches eval/exec (CWE-95).
+        try:
+            result = safe_arithmetic_eval(expression)
+        except UnsafeExpressionError as error:
+            return JsonResponse(
+                {'result': 'Invalid expression: {}'.format(error)}, status=400
+            )
         return JsonResponse({'result': result})
     else:
         return redirect('/mitre/25/lab/')
@@ -229,17 +250,28 @@ def mitre_lab_25(request):
 def mitre_lab_17(request):
     return render(request, 'mitre/mitre_lab_17.html')
 
+ALLOWED_COMMANDS = frozenset({'nmap'})
+
+
 def command_out(command):
-    process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    """Run an allowlisted command given as an argv list, never through a shell."""
+    if not isinstance(command, (list, tuple)) or not command:
+        raise ValueError('command must be a non-empty argument list')
+    argv = [str(arg) for arg in command]
+    if argv[0] not in ALLOWED_COMMANDS:
+        raise ValueError('command not allowed')
+    process = subprocess.Popen(argv, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return process.communicate()
     
 
-@csrf_exempt
 def mitre_lab_17_api(request):
     if request.method == "POST":
-        ip = request.POST.get('ip')
-        command = "nmap " + ip 
-        res, err = command_out(command)
+        ip = safe_host_target(request.POST.get('ip'), allow_networks=True)
+        if ip is None:
+            return JsonResponse(
+                {'raw_res': '', 'raw_err': 'Invalid scan target', 'ports': []},
+                status=400)
+        res, err = command_out(['nmap', ip])
         res = res.decode()
         err = err.decode()
         pattern = "STATE SERVICE.*\\n\\n"

@@ -1,27 +1,41 @@
 # Insecure Deserialization Lab
 
-A vulnerable web application demonstrating insecure deserialization vulnerabilities in Python using pickle.
+A web application demonstrating insecure deserialization concepts in Python, and the safe pattern that prevents them.
 
 ## Description
 
-This lab demonstrates the dangers of insecure deserialization by implementing a vulnerable user session mechanism that uses Python's pickle module. The application allows users to:
+This lab demonstrates the dangers of insecure deserialization through a user session mechanism. The application allows users to:
 
 1. Create a regular user account
 2. Receive a serialized token
 3. Submit the token for deserialization
-4. Exploit the vulnerability to gain admin access
+4. Observe that tampering with the token is detected instead of granting admin access
 
 ## Features
 
-- Vulnerable pickle deserialization
-- Base64 encoded serialized data
+- Signed JSON tokens instead of pickle
+- Base64 encoded payload with an HMAC-SHA256 signature
+- Strict type validation of the decoded payload
 - User role system (regular user vs admin)
 - Docker containerization
 - Light/Dark theme support
 
-## Security Warning
+## Configuration
 
-⚠️ This lab contains intentionally vulnerable code for educational purposes. Do not use this code in production environments.
+Set `INSEC_DES_LAB_SECRET_KEY` to the HMAC signing key. When it is unset, a
+random key is generated per process, which invalidates tokens from earlier runs.
+
+Set `INSEC_DES_LAB_CSRF_KEY` to the key used to sign CSRF tokens (a random
+per-process key is used when unset). Set `INSEC_DES_LAB_HTTPS=1` when the lab is
+served over TLS so the CSRF cookie is also marked `Secure`.
+
+Set `INSEC_DES_LAB_HOST` to the address the development server binds when the app
+is started with `python main.py`. It defaults to `127.0.0.1`, so a direct run is
+reachable only from the machine itself. The container image sets it to `0.0.0.0`
+because a process inside a container must bind a container-visible address for
+the published port to work, so `docker-compose up --build` still serves the lab
+on http://localhost:8080. Only set it to `0.0.0.0` outside a container if you
+accept exposing this deliberately vulnerable app to your network.
 
 ## Installation
 
@@ -72,20 +86,21 @@ insec_des_lab/
 
 ## Vulnerability Details
 
-The lab uses Python's pickle module for serialization/deserialization of user data. The vulnerability exists because:
+Insecure deserialization arises when an application reconstructs objects from
+attacker-controlled bytes, for example with `pickle.loads()`. Because pickle can
+execute arbitrary callables while loading, any tampered payload can lead to
+remote code execution as well as privilege escalation.
 
-1. The application trusts user-provided serialized data
-2. Uses pickle.loads() without validation
-3. The User class has a vulnerable __reduce__ method
+This lab now serializes user data as JSON and signs it with HMAC-SHA256, so
+untrusted bytes are never turned into an arbitrary object graph.
 
-## Exploitation Steps
+## Lab Steps
 
 1. Create a regular user account
-2. Intercept the serialized token
-3. Decode the base64 token
-4. Modify the serialized data to set is_admin=True
-5. Re-encode the modified data
-6. Submit the modified token to gain admin access
+2. Inspect the token: base64 payload, `.`, base64 signature
+3. Decode the base64 payload and modify it to set `is_admin` to `true`
+4. Re-encode the modified payload and submit the token
+5. Observe that the signature check rejects it, so admin content stays out of reach
 
 ## Mitigation Strategies
 

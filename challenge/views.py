@@ -3,7 +3,7 @@ from django.shortcuts import redirect, render
 from django.views.generic import View
 from django.views.decorators.csrf import csrf_exempt
 import subprocess
-from .utility import get_free_port
+from .utility import get_free_port, safe_container_ref
 from .models import Challenge, UserChallenge
 # Create your views here.
 
@@ -75,10 +75,18 @@ class DoItFast(View):
         except Exception as e:
             return JsonResponse({'message': 'failed', 'status': '500'})
 
+        # Only a plain docker container id/name may be stopped, so a stored
+        # value carrying shell metacharacters or extra arguments is refused.
+        container_ref = safe_container_ref(user_chal.container_id)
+        if container_ref is None:
+            return JsonResponse({'message': 'failed', 'status': '500'})
+
         user_chal.is_live = False
         user_chal.save()
-        command = f"docker stop {user_chal.container_id}"
-        process = subprocess.Popen(command.split(" "), stdout=subprocess.PIPE)
+        # Fixed argv with shell=False: the validated reference is its own
+        # argument, so no shell ever interprets it.
+        command = ["docker", "stop", container_ref]
+        process = subprocess.Popen(command, shell=False, stdout=subprocess.PIPE)
         output, error = process.communicate()
         return JsonResponse({'message': 'success', 'status': '200'})
     
