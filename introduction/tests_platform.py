@@ -8,6 +8,7 @@ DEBUG=False, so {% static %} blows up without collectstatic (and collectstatic
 fails upstream on a missing font). Gunicorn smoke uses DEBUG=True. Tests force
 plain StaticFilesStorage so we gate routes/auth, not WhiteNoise manifests.
 """
+import hashlib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,8 +16,11 @@ from django.contrib.auth.models import User
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
-from .models import (Blogs, CF_user, CSRF_user_tbl, comments,
-                     hash_lab_password, verify_lab_password)
+from pygoat.settings import LAB_COOKIE_SECURE
+
+from .models import (AF_session_id, Blogs, CF_user, CSRF_user_tbl, authLogin,
+                     comments, hash_lab_password, verify_lab_password)
+from .models import login as login_tbl
 from .playground.A6.utility import MAX_MODULES as A6_MAX_MODULES
 from .playground.A6.utility import MAX_RESPONSE_BYTES as A6_MAX_RESPONSE_BYTES
 from .playground.A6.utility import check_vuln
@@ -762,9 +766,184 @@ class PlatformRegressionTests(TestCase):
         )
         self.assertEqual(ok.status_code, 302)
         self.assertIn("auth_cookiee", ok.cookies)
+        self._assert_hardened_cookie(ok, "auth_cookiee")
         bad = self.client.post(
             reverse("csrf_lab_login"),
             {"username": "csrfuser", "password": "wrong"},
         )
         self.assertEqual(bad.status_code, 302)
         self.assertNotIn("auth_cookiee", bad.cookies)
+
+    # --- CWE-614/CWE-1004: cookie attributes on the lesson responses ---------
+
+    def _assert_hardened_cookie(self, response, name):
+        """Lab cookies are HttpOnly + SameSite, and Secure when served over TLS.
+
+        No JavaScript in this repo reads any of these cookies (the only
+        document.cookie readers are static/js/csrf.js for Django's own csrftoken
+        and the XSS lab's own flag cookie), so HttpOnly and SameSite=Lax are
+        applied unconditionally. Secure follows pygoat.settings.LAB_COOKIE_SECURE
+        (PYGOAT_HTTPS), because docker-compose serves plain HTTP.
+        """
+        self.assertIn(name, response.cookies, msg=name)
+        morsel = response.cookies[name]
+        self.assertTrue(morsel["httponly"], msg=name)
+        self.assertEqual(morsel["samesite"], "Lax", msg=name)
+        self.assertEqual(bool(morsel["secure"]), LAB_COOKIE_SECURE, msg=name)
+        return morsel
+
+    def test_insec_des_lab_token_cookie_flags(self):
+        """The signed deserialisation token keeps its value, gains its flags."""
+        self.client.force_login(self.user)
+        r = self.client.get(reverse("insec_des_lab"))
+        self.assertEqual(r.status_code, 200)
+        self._assert_hardened_cookie(r, "token")
+
+    def test_auth_lab_userid_cookie_flags(self):
+        """The auth labs still hand out 'userid', now with cookie attributes."""
+        signup = self.client.post(
+            reverse("auth_lab_signup"),
+            {"name": "Lab User", "username": "labuser", "pass": "labpass"},
+        )
+        self.assertEqual(signup.status_code, 200)
+        morsel = self._assert_hardened_cookie(signup, "userid")
+        userid = authLogin.objects.get(username="labuser").userid
+        self.assertEqual(morsel.value, str(userid))
+        self.assertEqual(int(morsel["max-age"]), 31449600)
+
+        posted = self.client.post(
+            reverse("auth_lab_login"),
+            {"username": "labuser", "pass": "labpass"},
+        )
+        self.assertEqual(posted.status_code, 200)
+        self._assert_hardened_cookie(posted, "userid")
+
+        fetched = Client()
+        fetched.cookies["userid"] = str(userid)
+        got = fetched.get(reverse("auth_lab_login"))
+        self.assertEqual(got.status_code, 200)
+        self._assert_hardened_cookie(got, "userid")
+
+    def test_broken_access_lab_admin_cookie_flags(self):
+        """Both role-flag branches of the broken access labs set the flags."""
+        login_tbl.objects.create(user="admin", password="adminpass")
+        login_tbl.objects.create(user="jack", password="jackpass")
+
+        admin_client = Client()
+        admin_client.force_login(self.user)
+        admin_r = admin_client.post("/ba_lab", {"name": "admin", "pass": "adminpass"})
+        self.assertEqual(admin_r.status_code, 200)
+        admin_morsel = self._assert_hardened_cookie(admin_r, "admin")
+        self.assertEqual(admin_morsel.value, "1")
+        self.assertEqual(int(admin_morsel["max-age"]), 200)
+
+        user_client = Client()
+        user_client.force_login(self.user)
+        user_r = user_client.post("/ba_lab", {"name": "jack", "pass": "jackpass"})
+        self.assertEqual(user_r.status_code, 200)
+        self.assertEqual(self._assert_hardened_cookie(user_r, "admin").value, "0")
+
+        lab_2021 = Client()
+        lab_2021.force_login(self.user)
+        lab_r = lab_2021.post(
+            "/broken_access_lab_1", {"name": "jack", "pass": "jacktheripper"}
+        )
+        self.assertEqual(lab_r.status_code, 200)
+        self.assertEqual(self._assert_hardened_cookie(lab_r, "admin").value, "0")
+
+    def test_otp_lab_email_cookie_flags(self):
+        """Both OTP branches keep the address the view reads back, with flags."""
+        user_r = self.client.get(
+            reverse("OTP Verification"), {"email": "victim@example.com"}
+        )
+        self.assertEqual(user_r.status_code, 200)
+        self.assertEqual(
+            self._assert_hardened_cookie(user_r, "email").value,
+            "victim@example.com",
+        )
+
+        admin_r = self.client.get(
+            reverse("OTP Verification"), {"email": "admin@pygoat.com"}
+        )
+        self.assertEqual(admin_r.status_code, 200)
+        self.assertEqual(
+            self._assert_hardened_cookie(admin_r, "email").value,
+            "admin@pygoat.com",
+        )
+
+    def test_crypto_failure_lab3_cookie_flags(self):
+        """The clear-text-cookie lab keeps its tamperable value, plus flags."""
+        self.client.force_login(self.user)
+        ok = self.client.post(
+            reverse("cryptographic_failure_lab3"),
+            {"username": "User", "password": "P@$$w0rd"},
+        )
+        self.assertEqual(ok.status_code, 200)
+        self.assertTrue(
+            self._assert_hardened_cookie(ok, "cookie").value.startswith("User|")
+        )
+
+        bad = self.client.post(
+            reverse("cryptographic_failure_lab3"),
+            {"username": "User", "password": "wrong"},
+        )
+        self.assertEqual(bad.status_code, 200)
+        self._assert_hardened_cookie(bad, "cookie")
+
+    def test_sec_misconfig_lab3_cookie_flags(self):
+        """The JWT lab still issues auth_cookie, now with cookie attributes."""
+        self.client.force_login(self.user)
+        r = self.client.get(reverse("Security Misconfiguration Lab"))
+        self.assertEqual(r.status_code, 200)
+        self._assert_hardened_cookie(r, "auth_cookie")
+
+    def test_auth_failure_lab3_session_cookie_flags(self):
+        """The session-id lab still issues its token, now with cookie attributes."""
+        self.client.force_login(self.user)
+        table = {
+            "LabUser": {
+                "userid": "1",
+                "username": "LabUser",
+                "password": hashlib.sha256(b"labpass").hexdigest(),
+            }
+        }
+        with patch.dict("introduction.views.USER_A7_LAB3", table, clear=True):
+            ok = self.client.post(
+                reverse("auth_failure_lab3"),
+                {"username": "LabUser", "password": "labpass"},
+            )
+        self.assertEqual(ok.status_code, 200)
+        morsel = self._assert_hardened_cookie(ok, "session_id")
+        self.assertTrue(AF_session_id.objects.filter(session_id=morsel.value).exists())
+
+        missing = self.client.post(reverse("auth_failure_lab3"), {})
+        self.assertEqual(missing.status_code, 200)
+        self._assert_hardened_cookie(missing, "session_id")
+
+    def test_lab_cookie_secure_follows_https_setting(self):
+        """CWE-614: Secure is driven by PYGOAT_HTTPS, not hard-coded either way.
+
+        docker-compose serves gunicorn over plain HTTP, so the dev default must
+        leave Secure off (a hard-coded True makes browsers drop the cookie and
+        breaks the labs), while HttpOnly/SameSite stay on in both modes.
+        """
+        self.client.force_login(self.user)
+        with patch("introduction.views.LAB_COOKIE_SECURE", True):
+            https = self.client.get(reverse("insec_des_lab"))
+        self.assertTrue(https.cookies["token"]["secure"])
+
+        plain = Client()
+        plain.force_login(self.user)
+        with patch("introduction.views.LAB_COOKIE_SECURE", False):
+            http = plain.get(reverse("insec_des_lab"))
+        self.assertFalse(http.cookies["token"]["secure"])
+        self.assertTrue(http.cookies["token"]["httponly"])
+        self.assertEqual(http.cookies["token"]["samesite"], "Lax")
+
+        CSRF_user_tbl.objects.create(username="httpsuser", password="labpass", balance=5)
+        with patch("introduction.mitre.LAB_COOKIE_SECURE", True):
+            mitre_https = self.client.post(
+                reverse("csrf_lab_login"),
+                {"username": "httpsuser", "password": "labpass"},
+            )
+        self.assertTrue(mitre_https.cookies["auth_cookiee"]["secure"])
