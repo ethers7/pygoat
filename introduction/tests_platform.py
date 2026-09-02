@@ -8,16 +8,21 @@ DEBUG=False, so {% static %} blows up without collectstatic (and collectstatic
 fails upstream on a missing font). Gunicorn smoke uses DEBUG=True. Tests force
 plain StaticFilesStorage so we gate routes/auth, not WhiteNoise manifests.
 """
+from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
-from .models import (CF_user, CSRF_user_tbl, comments, hash_lab_password,
-                     verify_lab_password)
-from .utility import (UnsafeExpressionError, safe_arithmetic_eval,
-                      safe_fetch_url, safe_host_target)
+from .models import (Blogs, CF_user, CSRF_user_tbl, comments,
+                     hash_lab_password, verify_lab_password)
+from .utility import (MAX_STORED_TEXT_LENGTH, InvalidStoredTextError,
+                      UnsafeExpressionError, safe_arithmetic_eval,
+                      safe_fetch_url, safe_host_target, safe_python_source,
+                      safe_stored_text)
+
+APP_DIR = Path(__file__).resolve().parent
 
 
 class _StubResponse:
@@ -460,6 +465,124 @@ class PlatformRegressionTests(TestCase):
         )
         self.assertEqual(bad.status_code, 200)
         self.assertContains(bad, "Login Failed")
+
+    def test_safe_stored_text_normalises_valid_text(self):
+        """Stored text keeps its content, with normalised line endings."""
+        self.assertEqual(safe_stored_text(" hello\r\nworld "), "hello\nworld")
+        self.assertEqual(safe_stored_text("a\tb"), "a\tb")
+
+    def test_safe_stored_text_rejects_unusable_values(self):
+        """CWE-915 regression: unchecked request values never reach a store."""
+        for payload in (
+            None,
+            42,
+            b"bytes",
+            "",
+            "   ",
+            "null\x00byte",
+            "escape\x1b[31m",
+            "bell\x07",
+            "x" * (MAX_STORED_TEXT_LENGTH + 1),
+        ):
+            with self.assertRaises(InvalidStoredTextError, msg=repr(payload)):
+                safe_stored_text(payload)
+
+    def test_safe_python_source_accepts_a_lab_module(self):
+        self.assertEqual(
+            safe_python_source("def log(msg):\r\n    return msg\r\n"),
+            "def log(msg):\n    return msg",
+        )
+
+    def test_safe_python_source_rejects_unparsable_payloads(self):
+        """Only syntactically valid Python may replace a module on disk."""
+        for payload in (
+            None,
+            "",
+            "   ",
+            "def broken(:",
+            "class Bad",
+            "print('unclosed",
+            "def f():\npass",
+            "ok = 1\x00",
+        ):
+            with self.assertRaises(InvalidStoredTextError, msg=repr(payload)):
+                safe_python_source(payload)
+
+    def test_a9_code_checker_rejects_unvalidated_source(self):
+        """CWE-915 regression: the A9 lab modules are not overwritten."""
+        main_path = APP_DIR / "playground" / "A9" / "main.py"
+        api_path = APP_DIR / "playground" / "A9" / "api.py"
+        before = (main_path.read_text(), api_path.read_text())
+        for data in (
+            {},
+            {"log_code": "", "api_code": ""},
+            {"log_code": "def broken(:", "api_code": "x = 1"},
+            {"log_code": "x = 1", "api_code": "class Bad(:"},
+            {"log_code": "x = 1", "api_code": "y = 2\x1b[31m"},
+            {"log_code": "x = 1", "api_code": "y = 2" + "#" * 30000},
+        ):
+            r = self.client.post("/2021/discussion/A9/api", data)
+            self.assertEqual(r.status_code, 400, msg=repr(data))
+            self.assertIn("code", r.json()["message"])
+        self.assertEqual((main_path.read_text(), api_path.read_text()), before)
+
+    def test_a6_code_checker_rejects_unvalidated_source(self):
+        """CWE-915 regression: the A6 lab module is not overwritten."""
+        utility_path = APP_DIR / "playground" / "A6" / "utility.py"
+        before = utility_path.read_text()
+        for data in (
+            {},
+            {"code": ""},
+            {"code": "   "},
+            {"code": "def broken(:"},
+            {"code": "x = 1\x1b[31m"},
+        ):
+            r = self.client.post("/2021/discussion/A6/api2", data)
+            self.assertEqual(r.status_code, 400, msg=repr(data))
+            self.assertIn("code", r.json()["message"])
+        self.assertEqual(utility_path.read_text(), before)
+
+    def _ssti_blogs_dir(self):
+        """The lab writes blog templates here; keep the tree clean afterwards."""
+        blogs_dir = APP_DIR / "templates" / "Lab_2021" / "A3_Injection" / "Blogs"
+        existing = {path.name for path in blogs_dir.iterdir()}
+
+        def remove_blogs_written_by_this_test():
+            for path in blogs_dir.iterdir():
+                if path.name not in existing:
+                    path.unlink()
+
+        self.addCleanup(remove_blogs_written_by_this_test)
+        return blogs_dir
+
+    def test_ssti_lab_rejects_unvalidated_blog_body(self):
+        """CWE-915 regression: no row and no template file for bad input."""
+        self.client.force_login(self.user)
+        blogs_dir = self._ssti_blogs_dir()
+        before = sorted(path.name for path in blogs_dir.iterdir())
+        for data in (
+            {},
+            {"blog": ""},
+            {"blog": "   "},
+            {"blog": "post\x1b[31m"},
+            {"blog": "x" * (MAX_STORED_TEXT_LENGTH + 1)},
+        ):
+            r = self.client.post(reverse("SSTI Lab"), data)
+            self.assertEqual(r.status_code, 200, msg=repr(data))
+            self.assertContains(r, "alert-danger", msg_prefix=repr(data))
+        self.assertEqual(Blogs.objects.count(), 0)
+        self.assertEqual(sorted(path.name for path in blogs_dir.iterdir()), before)
+
+    def test_ssti_lab_still_stores_a_valid_blog(self):
+        """A valid submission is still persisted and redirects to the blog."""
+        self.client.force_login(self.user)
+        blogs_dir = self._ssti_blogs_dir()
+        r = self.client.post(reverse("SSTI Lab"), {"blog": "my safe blog body"})
+        self.assertEqual(r.status_code, 302)
+        blog = Blogs.objects.get(author=self.user)
+        path = blogs_dir / f"{blog.blog_id}.html"
+        self.assertIn("blog/" + blog.blog_id, r["Location"])
+        self.assertIn("my safe blog body", path.read_text())
 
     def test_csrf_lab_login(self):
         """The CSRF lab still issues its JWT cookie for valid credentials only."""
