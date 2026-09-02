@@ -17,8 +17,13 @@ from django.urls import reverse
 
 from .models import (Blogs, CF_user, CSRF_user_tbl, comments,
                      hash_lab_password, verify_lab_password)
-from .utility import (MAX_STORED_TEXT_LENGTH, InvalidStoredTextError,
-                      UnsafeExpressionError, safe_arithmetic_eval,
+from .playground.A6.utility import MAX_MODULES as A6_MAX_MODULES
+from .playground.A6.utility import MAX_RESPONSE_BYTES as A6_MAX_RESPONSE_BYTES
+from .playground.A6.utility import check_vuln
+from .utility import (FETCH_TIMEOUT, MAX_FETCH_RESPONSE_BYTES,
+                      MAX_STORED_TEXT_LENGTH, InvalidStoredTextError,
+                      ResponseTooLargeError, UnsafeExpressionError,
+                      read_bounded_response, safe_arithmetic_eval,
                       safe_fetch_url, safe_host_target, safe_python_source,
                       safe_stored_text)
 
@@ -26,12 +31,23 @@ APP_DIR = Path(__file__).resolve().parent
 
 
 class _StubResponse:
-    """Minimal stand-in for requests.Response used by the SSRF lab tests."""
+    """Minimal stand-in for requests.Response used by the outbound fetch tests."""
 
     def __init__(self, content=b"", headers=None, is_redirect=False):
         self.content = content
         self.headers = headers or {}
         self.is_redirect = is_redirect
+        self.closed = False
+
+    def iter_content(self, chunk_size=1):
+        for start in range(0, len(self.content), max(chunk_size, 1)):
+            yield self.content[start:start + max(chunk_size, 1)]
+
+    def raise_for_status(self):
+        return None
+
+    def close(self):
+        self.closed = True
 
 
 @override_settings(
@@ -206,6 +222,63 @@ class PlatformRegressionTests(TestCase):
         self.assertEqual(args[0], "http://example.com/blog")
         self.assertFalse(kwargs["allow_redirects"])
         self.assertTrue(kwargs["timeout"])
+        # CWE-400: the body is streamed so it can be capped while it arrives.
+        self.assertTrue(kwargs["stream"])
+
+    @patch("introduction.views.requests.get")
+    @patch("introduction.utility.socket.getaddrinfo")
+    def test_ssrf_lab2_refuses_oversized_response(self, getaddrinfo, requests_get):
+        """CWE-400 regression: an endless remote body is capped, not buffered."""
+        getaddrinfo.return_value = [(2, 1, 6, "", ("93.184.216.34", 80))]
+        requests_get.return_value = _StubResponse(
+            content=b"x" * (MAX_FETCH_RESPONSE_BYTES + 1)
+        )
+        self.client.force_login(self.user)
+        r = self.client.post("/ssrf_lab2", {"url": "http://example.com/blog"})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "more data than this lab will display")
+
+    def test_read_bounded_response_caps_body(self):
+        """CWE-400 regression: read_bounded_response never buffers past the cap."""
+        small = _StubResponse(content=b"a" * 32)
+        self.assertEqual(read_bounded_response(small), b"a" * 32)
+        self.assertTrue(small.closed)
+
+        oversized = _StubResponse(content=b"a" * (MAX_FETCH_RESPONSE_BYTES + 1))
+        with self.assertRaises(ResponseTooLargeError):
+            read_bounded_response(oversized)
+        self.assertTrue(oversized.closed)
+
+    def test_fetch_timeout_is_configured(self):
+        """Every outbound fetch has a connect and a read timeout."""
+        connect_timeout, read_timeout = FETCH_TIMEOUT
+        self.assertGreater(connect_timeout, 0)
+        self.assertGreater(read_timeout, 0)
+
+    @patch("introduction.playground.A6.utility.requests.get")
+    def test_a6_check_vuln_bounds_pypi_lookups(self, requests_get):
+        """CWE-400 regression: the A6 lab lookups are bounded and still work."""
+        requests_get.return_value = _StubResponse(
+            content=b'{"vulnerabilities": [{"id": "PYSEC-0000"}]}'
+        )
+        self.assertEqual(
+            check_vuln(["Pillow==8.0.0"]), [[{"id": "PYSEC-0000"}]]
+        )
+        _, kwargs = requests_get.call_args
+        self.assertTrue(kwargs["timeout"])
+        self.assertTrue(kwargs["stream"])
+
+        requests_get.return_value = _StubResponse(
+            content=b"x" * (A6_MAX_RESPONSE_BYTES + 1)
+        )
+        with self.assertRaises(ValueError):
+            check_vuln(["Pillow==8.0.0"])
+
+        requests_get.reset_mock()
+        too_many = ["Pillow==8.0.0"] * (A6_MAX_MODULES + 1)
+        with self.assertRaises(ValueError):
+            check_vuln(too_many)
+        requests_get.assert_not_called()
 
     @patch("introduction.views.requests.get")
     @patch("introduction.utility.socket.getaddrinfo")
