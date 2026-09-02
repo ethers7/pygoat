@@ -10,7 +10,6 @@ import string
 import subprocess
 import uuid
 from dataclasses import dataclass
-from hashlib import md5
 from io import BytesIO
 from random import randint
 from urllib.parse import urljoin
@@ -35,7 +34,8 @@ from requests.structures import CaseInsensitiveDict
 
 from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
-                     comments, info, login, otp, sql_lab_table, tickits)
+                     comments, info, login, otp, sql_lab_table, tickits,
+                     verify_lab_password)
 from .utility import (MAX_FETCH_REDIRECTS, UnsafeExpressionError, customHash,
                       fetch_allowed_hosts, filter_blog, safe_arithmetic_eval,
                       safe_fetch_url, safe_host_target)
@@ -1097,8 +1097,13 @@ def crypto_failure_lab(request):
             username = request.POST["username"]
             password = request.POST["password"]
             try:
-                password = md5(password.encode()).hexdigest()
-                user = CF_user.objects.filter(username=username,password=password).first()
+                # CWE-327: the submitted password is verified against the stored
+                # PBKDF2 hash with Django's configured hashers instead of being
+                # matched as an unsalted MD5 digest.
+                user = CF_user.objects.filter(username=username).first()
+                if user is None or not verify_lab_password(password, user.password):
+                    return render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab.html",
+                                  {"success":False, "failure":True})
                 return render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab.html",{"user":user, "success":True,"failure":False})
             except Exception as e:
                 return render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab.html",{"success":False, "failure":True})

@@ -14,7 +14,8 @@ from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from .models import comments
+from .models import (CF_user, CSRF_user_tbl, comments, hash_lab_password,
+                     verify_lab_password)
 from .utility import (UnsafeExpressionError, safe_arithmetic_eval,
                       safe_fetch_url, safe_host_target)
 
@@ -324,3 +325,66 @@ class PlatformRegressionTests(TestCase):
         )
         self.assertEqual(r.status_code, 302)
         self.assertEqual(self.client.get("/").status_code, 200)
+
+    def test_lab_credentials_are_stored_as_pbkdf2(self):
+        """CWE-327 regression: lab seeding never persists MD5/plaintext."""
+        cf = CF_user.objects.create(username="cf", password="labpass", password2="x")
+        csrf = CSRF_user_tbl.objects.create(username="cu", password="labpass", balance=10)
+        for row in (cf, csrf):
+            row.refresh_from_db()
+            self.assertTrue(row.password.startswith("pbkdf2_sha256$"), msg=row.password)
+            self.assertNotEqual(row.password, "labpass")
+            self.assertTrue(verify_lab_password("labpass", row.password))
+            self.assertFalse(verify_lab_password("wrong", row.password))
+
+    def test_hash_lab_password_is_idempotent(self):
+        """Re-saving a row (balance transfer) must not re-hash the hash."""
+        csrf = CSRF_user_tbl.objects.create(username="cu2", password="labpass")
+        stored = csrf.password
+        csrf.balance = 50
+        csrf.save()
+        csrf.refresh_from_db()
+        self.assertEqual(csrf.password, stored)
+        self.assertTrue(verify_lab_password("labpass", csrf.password))
+        self.assertEqual(hash_lab_password(stored), stored)
+
+    def test_verify_lab_password_rejects_legacy_md5_digest(self):
+        """Rows still holding a bare MD5 digest fail closed, they do not crash."""
+        legacy = "0" * 32  # shape of a bare MD5 hex digest, no configured hasher
+        self.assertFalse(verify_lab_password("labpass", legacy))
+        self.assertFalse(verify_lab_password("", legacy))
+        self.assertFalse(verify_lab_password("labpass", ""))
+
+    def test_crypto_failure_lab_login(self):
+        """The lab still authenticates a correctly seeded user, and only that user."""
+        CF_user.objects.create(username="cfuser", password="labpass", password2="x")
+        self.client.force_login(self.user)
+        ok = self.client.post(
+            reverse("cryptographic_failure_lab"),
+            {"username": "cfuser", "password": "labpass"},
+        )
+        self.assertEqual(ok.status_code, 200)
+        self.assertContains(ok, "Successfully logged in as cfuser")
+        bad = self.client.post(
+            reverse("cryptographic_failure_lab"),
+            {"username": "cfuser", "password": "wrong"},
+        )
+        self.assertEqual(bad.status_code, 200)
+        self.assertContains(bad, "Login Failed")
+
+    def test_csrf_lab_login(self):
+        """The CSRF lab still issues its JWT cookie for valid credentials only."""
+        CSRF_user_tbl.objects.create(username="csrfuser", password="labpass", balance=100)
+        self.client.force_login(self.user)
+        ok = self.client.post(
+            reverse("csrf_lab_login"),
+            {"username": "csrfuser", "password": "labpass"},
+        )
+        self.assertEqual(ok.status_code, 302)
+        self.assertIn("auth_cookiee", ok.cookies)
+        bad = self.client.post(
+            reverse("csrf_lab_login"),
+            {"username": "csrfuser", "password": "wrong"},
+        )
+        self.assertEqual(bad.status_code, 302)
+        self.assertNotIn("auth_cookiee", bad.cookies)
