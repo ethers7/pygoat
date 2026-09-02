@@ -11,7 +11,7 @@ plain StaticFilesStorage so we gate routes/auth, not WhiteNoise manifests.
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
-from django.test import TestCase, override_settings
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
 from .models import (CF_user, CSRF_user_tbl, comments, hash_lab_password,
@@ -317,6 +317,95 @@ class PlatformRegressionTests(TestCase):
             r = self.client.post("/mitre/25/lab/api", {"expression": payload})
             self.assertEqual(r.status_code, 400, msg=payload)
             self.assertIn("Invalid expression", r.json()["result"])
+
+    def _csrf_client(self, login=True):
+        """A client that enforces CSRF checks the way a real browser POST does."""
+        client = Client(enforce_csrf_checks=True)
+        if login:
+            client.force_login(self.user)
+        return client
+
+    def _csrf_token(self, client, path="/cmd_lab"):
+        """Load a page so Django sets the csrftoken cookie, then return it."""
+        page = client.get(path)
+        self.assertEqual(page.status_code, 200, msg=path)
+        self.assertContains(page, "csrfmiddlewaretoken")
+        return client.cookies["csrftoken"].value
+
+    def test_lab_post_endpoints_require_csrf_token(self):
+        """CWE-352 regression: no lab view is exempt from CsrfViewMiddleware."""
+        client = self._csrf_client()
+        for path, data in (
+            ("/cmd_lab", {"domain": "example.com", "os": "lin"}),
+            ("/cmd_lab2", {"val": "7*7"}),
+            ("/ba_lab", {"name": "jack", "pass": "jacktheripper"}),
+            ("/broken_access_lab_1", {"name": "jack", "pass": "jacktheripper"}),
+            ("/broken_access_lab_2", {"name": "jack", "pass": "jacktheripper"}),
+            ("/injection_sql_lab", {"name": "admin", "pass": "admin"}),
+            ("/a9_lab", {}),
+            ("/a9_lab2", {}),
+            ("/otp", {"otp": "123"}),
+            ("/mitre/25/lab/api", {"expression": "1+1"}),
+            ("/mitre/17/lab/api", {"ip": "127.0.0.1"}),
+            ("/2021/discussion/A7/api", {"code": "x"}),
+            ("/2021/discussion/A6/api2", {"code": "x"}),
+            ("/api/ssrf", {"python_code": "x", "html_code": "x"}),
+            ("/2021/discussion/A9/target", {"username": "admin", "password": "admin"}),
+        ):
+            r = client.post(path, data)
+            self.assertEqual(r.status_code, 403, msg=path)
+
+    def test_xxe_parse_requires_csrf_token(self):
+        """CWE-352 regression: the XML endpoint is CSRF protected too."""
+        comments.objects.create(id=1, name="System", comment="old")
+        r = self._csrf_client(login=False).post(
+            "/xxe_parse",
+            data="<comm><text>forged</text></comm>",
+            content_type="text/xml",
+        )
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(comments.objects.get(id=1).comment, "old")
+
+    def test_cmd_lab_form_post_works_with_csrf_token(self):
+        """The lab form still submits once the rendered token is sent back."""
+        client = self._csrf_client()
+        token = self._csrf_token(client)
+        r = client.post(
+            "/cmd_lab",
+            {
+                "domain": "example.com; id",
+                "os": "lin",
+                "csrfmiddlewaretoken": token,
+            },
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Invalid domain name")
+
+    def test_mitre_lab_25_api_works_with_csrf_header(self):
+        """AJAX callers still reach the API by sending the X-CSRFToken header."""
+        client = self._csrf_client()
+        token = self._csrf_token(client)
+        r = client.post(
+            "/mitre/25/lab/api",
+            {"expression": "(2+3)*4"},
+            HTTP_X_CSRFTOKEN=token,
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["result"], 20)
+
+    def test_xxe_parse_works_with_csrf_header(self):
+        """The XML AJAX caller still stores comments when it sends the token."""
+        comments.objects.create(id=1, name="System", comment="old")
+        client = self._csrf_client()
+        token = self._csrf_token(client)
+        r = client.post(
+            "/xxe_parse",
+            data="<?xml version='1.0'?><comm><text>hello world</text></comm>",
+            content_type="text/xml",
+            HTTP_X_CSRFTOKEN=token,
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(comments.objects.get(id=1).comment, "hello world")
 
     def test_login_post(self):
         r = self.client.post(

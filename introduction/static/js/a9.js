@@ -17,10 +17,11 @@ event3 = function(){
     var myHeaders = new Headers();
     // Do not hard-code session credentials (jwt / csrftoken) here: the browser
     // attaches the caller's own cookies to this same-origin request, and
-    // "Cookie" is a forbidden header name that fetch() ignores anyway.
+    // "Cookie" is a forbidden header name that fetch() ignores anyway. The CSRF
+    // token is read at call time from the page (see static/js/csrf.js).
+    myHeaders.append("X-CSRFToken", pygoatCSRFToken());
 
     var formdata = new FormData();
-    formdata.append("csrfmiddlewaretoken", "5fVOTXh2HNahtvJFJNRSrKkwPAgPM9YCHlrCGprAxhAAKOUWMxqMnWm8BUomv0Yd");
     formdata.append("log_code", log_code);
     formdata.append("api_code", target_code);
 

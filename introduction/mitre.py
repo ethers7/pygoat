@@ -5,7 +5,6 @@ import subprocess
 import jwt
 from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
-from django.views.decorators.csrf import csrf_exempt
 
 from pygoat.settings import CSRF_LAB_JWT_KEY
 
@@ -179,7 +178,6 @@ def csrf_lab_login(request):
             return redirect('/mitre/9/lab/login')
 
 @authentication_decorator
-@csrf_exempt
 def csrf_transfer_monei(request):
     if request.method == 'GET':
         try:
@@ -216,7 +214,6 @@ def csrf_transfer_monei_api(request,recipent,amount):
 
 
 # @authentication_decorator
-@csrf_exempt
 def mitre_lab_25_api(request):
     if request.method == "POST":
         expression = request.POST.get('expression')
@@ -255,7 +252,6 @@ def command_out(command):
     return process.communicate()
     
 
-@csrf_exempt
 def mitre_lab_17_api(request):
     if request.method == "POST":
         ip = safe_host_target(request.POST.get('ip'), allow_networks=True)

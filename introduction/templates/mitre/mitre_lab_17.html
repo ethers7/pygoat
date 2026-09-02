@@ -24,6 +24,8 @@
             var input = document.getElementById("input").value;
             var output = document.getElementById("output");
             var headers = new Headers();
+            // CsrfViewMiddleware protects this endpoint, so send the token.
+            headers.append("X-CSRFToken", pygoatCSRFToken());
             var formdata = new FormData();
             formdata.append("ip", input);
             var requestOption = {

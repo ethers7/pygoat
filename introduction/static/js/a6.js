@@ -1,6 +1,8 @@
 event5 = function(){
     var code = document.getElementById('a6_t1').value
     var myHeaders = new Headers();
+    // CsrfViewMiddleware protects this endpoint, so send the token.
+    myHeaders.append("X-CSRFToken", pygoatCSRFToken());
     var formdata = new FormData();
 
     formdata.append("code", code);
@@ -24,6 +26,8 @@ event5 = function(){
 event6 = function(){
     var code = document.getElementById('a6_t1').value
     var myHeaders = new Headers();
+    // CsrfViewMiddleware protects this endpoint, so send the token.
+    myHeaders.append("X-CSRFToken", pygoatCSRFToken());
     var formdata = new FormData();
 
     formdata.append("code", code);

@@ -35,6 +35,8 @@ function SendToServer(){
         var url = $("#Url").attr("data-url");
        xhr.open("POST", url, true);
        xhr.setRequestHeader("Content-Type", "text/xml");
+       // CsrfViewMiddleware protects this endpoint, so send the token.
+       xhr.setRequestHeader("X-CSRFToken", pygoatCSRFToken());
        xhr.send(xml);
 
 }

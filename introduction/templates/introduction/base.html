@@ -37,11 +37,16 @@
       integrity="sha384-6OIrr52G08NpOFSZdxxz1xdNSndlD4vdcf/q2myIUVO0VsqaGHJsB0RaBE01VTOY"
       crossorigin="anonymous"
     ></script>
+    <script defer src="{% static 'js/csrf.js' %}"> </script>
     <script defer src="{% static 'Lab/xss.js' %}"> </script>
     <script defer src="{% static 'Lab/ssrf.js' %}"> </script>
   </head>
 
   <body>
+    <!-- Renders Django's CSRF token (and sets the csrftoken cookie) on every
+         page so the AJAX callers in static/js can send the X-CSRFToken header
+         required by CsrfViewMiddleware. See static/js/csrf.js. -->
+    <form id="csrf-token-holder" hidden>{% csrf_token %}</form>
     <div class="wrapper">
       <div class="pg active">PG</div>
       <!-- Sidebar  -->

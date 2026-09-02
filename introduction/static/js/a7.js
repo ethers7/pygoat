@@ -2,10 +2,11 @@ event4 = function(){
     var code = document.getElementById('a7_input').value
     var myHeaders = new Headers();
     // Do not hard-code session credentials (jwt / csrftoken) here: the browser
-    // attaches the caller's own cookies to this same-origin request.
+    // attaches the caller's own cookies to this same-origin request, and the
+    // CSRF token is read at call time from the page (see static/js/csrf.js).
+    myHeaders.append("X-CSRFToken", pygoatCSRFToken());
 
     var formdata = new FormData();
-    // formdata.append("csrfmiddlewaretoken", "5fVOTXh2HNahtvJFJNRSrKkwPAgPM9YCHlrCGprAxhAAKOUWMxqMnWm8BUomv0Yd");
     formdata.append("code", code);
 
     var requestOptions = {

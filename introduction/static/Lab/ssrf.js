@@ -64,6 +64,8 @@ function checkcode(){
     formdata.append('html_code', html_code);
     var requestOptions = {
         method: 'POST',
+        // CsrfViewMiddleware protects this endpoint, so send the token.
+        headers: {'X-CSRFToken': pygoatCSRFToken()},
         body: formdata,
         redirect: 'follow'
       };
