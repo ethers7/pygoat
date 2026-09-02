@@ -24,10 +24,9 @@ from django.contrib import messages
 from django.contrib.auth import authenticate, login
 from django.contrib.auth.forms import UserCreationForm
 from django.core import serializers, signing
-from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
+from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
 from django.template import loader
-from django.template.loader import render_to_string
 from PIL import Image, ImageMath
 from requests.structures import CaseInsensitiveDict
 
@@ -322,8 +321,11 @@ def auth_lab_signup(request):
             passwd  = request.POST['pass']
             obj = authLogin.objects.create(name=name,username=user_name,password=passwd)
             try:
-                rendered = render_to_string('Lab/AUTH/auth_success.html', {'username': obj.username,'userid':obj.userid,'name':obj.name,'err_msg':'Cookie Set'})
-                response = HttpResponse(rendered)
+                # CWE-79: return the template response directly so the request
+                # context and Django's contextual auto-escaping are applied to
+                # the user-supplied values, instead of handing pre-rendered
+                # markup to HttpResponse.
+                response = render(request, 'Lab/AUTH/auth_success.html', {'username': obj.username,'userid':obj.userid,'name':obj.name,'err_msg':'Cookie Set'})
                 response.set_cookie('userid', obj.userid, max_age=31449600, samesite=None, secure=False)
                 print('Setting cookie successful')
                 return response
@@ -336,8 +338,9 @@ def auth_lab_login(request):
     if request.method == 'GET':
         try:
             obj = authLogin.objects.filter(userid=request.COOKIES['userid'])[0]
-            rendered = render_to_string('Lab/AUTH/auth_success.html', {'username': obj.username,'userid':obj.userid,'name':obj.name, 'err_msg':'Login Successful'})
-            response = HttpResponse(rendered)
+            # CWE-79: render through Django's template response so untrusted
+            # values are auto-escaped for the HTML context.
+            response = render(request, 'Lab/AUTH/auth_success.html', {'username': obj.username,'userid':obj.userid,'name':obj.name, 'err_msg':'Login Successful'})
             response.set_cookie('userid', obj.userid, max_age=31449600, samesite=None, secure=False)
             print('Login successful')
             return response
@@ -350,8 +353,9 @@ def auth_lab_login(request):
             print(user_name,passwd)
             obj = authLogin.objects.filter(username=user_name,password=passwd)[0]
             try:
-                rendered = render_to_string('Lab/AUTH/auth_success.html', {'username': obj.username,'userid':obj.userid,'name':obj.name, 'err_msg':'Login Successful'})
-                response = HttpResponse(rendered)
+                # CWE-79: render through Django's template response so untrusted
+                # values are auto-escaped for the HTML context.
+                response = render(request, 'Lab/AUTH/auth_success.html', {'username': obj.username,'userid':obj.userid,'name':obj.name, 'err_msg':'Login Successful'})
                 response.set_cookie('userid', obj.userid, max_age=31449600, samesite=None, secure=False)
                 print('Login successful')
                 return response
@@ -361,8 +365,9 @@ def auth_lab_login(request):
             return render(request,'Lab/AUTH/auth_lab_login.html',{'err_msg':'Check your credentials'})
 
 def auth_lab_logout(request):
-    rendered = render_to_string('Lab/AUTH/auth_lab.html',context={'err_msg':'Logout successful'})
-    response = HttpResponse(rendered)    
+    # CWE-79: render through Django's template response so the template engine
+    # auto-escapes the rendered context values.
+    response = render(request, 'Lab/AUTH/auth_lab.html', {'err_msg': 'Logout successful'})
     response.delete_cookie('userid')
     return response
 
