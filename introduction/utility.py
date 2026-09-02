@@ -1,10 +1,12 @@
 import ast
 import hashlib
+import hmac
 import ipaddress
 import math
 import operator
 import os
 import re
+import secrets
 import socket
 import uuid
 from urllib.parse import urlsplit, urlunsplit
@@ -376,6 +378,45 @@ def safe_contained_path(base_dir, candidate, allowed_dir=None, allowed_suffixes=
     if allowed_suffixes and os.path.splitext(resolved)[1].lower() not in allowed_suffixes:
         raise UnsafePathError('that file type is not allowed')
     return resolved
+
+
+# Numeric one time codes (CWE-330). ``random`` is a Mersenne Twister: a handful
+# of observed codes is enough to recover its state and predict every later code,
+# so OTPs are drawn from the OS CSPRNG through ``secrets`` instead. The width is
+# unchanged - ``otp.otp`` is an IntegerField with a value validator and the lab
+# template renders a 3 digit code - so only the source of randomness changes.
+OTP_DIGITS = 3
+OTP_MIN_VALUE = 10 ** (OTP_DIGITS - 1)
+OTP_MAX_VALUE = 10 ** OTP_DIGITS - 1
+
+
+def generate_numeric_otp():
+    """Return an unpredictable ``OTP_DIGITS`` digit numeric one time code."""
+    return OTP_MIN_VALUE + secrets.randbelow(OTP_MAX_VALUE - OTP_MIN_VALUE + 1)
+
+
+def otp_matches(submitted, stored_values):
+    """Compare a submitted OTP with stored codes without leaking timing.
+
+    ``submitted`` is untrusted request data, so it is accepted only when it is a
+    numeric string (a non numeric value previously reached the IntegerField
+    lookup and raised), normalised the way the integer column compares it, and
+    then checked against each candidate with :func:`hmac.compare_digest`. Every
+    candidate is visited so a near miss costs the same as a wrong first digit.
+    """
+    if not isinstance(submitted, str):
+        return False
+    candidate = submitted.strip()
+    if not candidate.isdigit():
+        return False
+    normalised = str(int(candidate))
+    matched = False
+    for stored in stored_values:
+        if stored is None:
+            continue
+        if hmac.compare_digest(str(stored), normalised):
+            matched = True
+    return matched
 
 
 def ssrf_code_converter(code):

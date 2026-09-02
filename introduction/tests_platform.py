@@ -21,16 +21,18 @@ from pygoat.settings import LAB_COOKIE_SECURE
 from .models import (AF_session_id, Blogs, CF_user, CSRF_user_tbl, authLogin,
                      comments, hash_lab_password, verify_lab_password)
 from .models import login as login_tbl
+from .models import otp as otp_tbl
 from .playground.A6.utility import MAX_MODULES as A6_MAX_MODULES
 from .playground.A6.utility import MAX_RESPONSE_BYTES as A6_MAX_RESPONSE_BYTES
 from .playground.A6.utility import check_vuln
 from .utility import (FETCH_TIMEOUT, MAX_FETCH_RESPONSE_BYTES,
-                      MAX_STORED_TEXT_LENGTH, InvalidStoredTextError,
+                      MAX_STORED_TEXT_LENGTH, OTP_DIGITS, OTP_MAX_VALUE,
+                      OTP_MIN_VALUE, InvalidStoredTextError,
                       ResponseTooLargeError, UnsafeExpressionError,
-                      UnsafePathError, read_bounded_response,
-                      safe_arithmetic_eval, safe_contained_path,
-                      safe_fetch_url, safe_host_target, safe_python_source,
-                      safe_stored_text)
+                      UnsafePathError, generate_numeric_otp, otp_matches,
+                      read_bounded_response, safe_arithmetic_eval,
+                      safe_contained_path, safe_fetch_url, safe_host_target,
+                      safe_python_source, safe_stored_text)
 
 APP_DIR = Path(__file__).resolve().parent
 
@@ -870,6 +872,65 @@ class PlatformRegressionTests(TestCase):
             self._assert_hardened_cookie(admin_r, "email").value,
             "admin@pygoat.com",
         )
+
+    def test_otp_drawn_from_secrets_in_expected_range(self):
+        """CWE-330: OTPs come from the CSPRNG, not random's Mersenne Twister."""
+        self.assertEqual((OTP_MIN_VALUE, OTP_MAX_VALUE, OTP_DIGITS), (100, 999, 3))
+
+        with patch(
+            "introduction.utility.secrets.randbelow", return_value=0
+        ) as randbelow:
+            self.assertEqual(generate_numeric_otp(), OTP_MIN_VALUE)
+        randbelow.assert_called_once_with(OTP_MAX_VALUE - OTP_MIN_VALUE + 1)
+
+        for _ in range(200):
+            code = generate_numeric_otp()
+            self.assertIsInstance(code, int)
+            self.assertGreaterEqual(code, OTP_MIN_VALUE)
+            self.assertLessEqual(code, OTP_MAX_VALUE)
+            self.assertEqual(len(str(code)), OTP_DIGITS)
+
+    def test_otp_lab_issues_and_validates_code(self):
+        """The lab still stores the issued code and accepts a correct submission."""
+        otp_tbl.objects.create(id=1, email="", otp=0)
+        otp_tbl.objects.create(id=2, email="admin@pygoat.com", otp=0)
+
+        with patch(
+            "introduction.views.generate_numeric_otp", return_value=123
+        ) as generated:
+            sent = self.client.get(
+                reverse("OTP Verification"), {"email": "victim@example.com"}
+            )
+        self.assertEqual(sent.status_code, 200)
+        generated.assert_called_once_with()
+        record = otp_tbl.objects.get(id=1)
+        self.assertEqual(record.email, "victim@example.com")
+        self.assertEqual(record.otp, 123)
+        self.assertContains(sent, "123")
+
+        ok = self.client.post(reverse("OTP Verification"), {"otp": "123"})
+        self.assertEqual(ok.status_code, 200)
+        self.assertContains(ok, "Login Successful")
+
+        wrong = self.client.post(reverse("OTP Verification"), {"otp": "124"})
+        self.assertEqual(wrong.status_code, 200)
+        self.assertContains(wrong, "Invalid OTP")
+
+        # A non numeric submission used to reach the IntegerField lookup; it now
+        # fails closed with the same response shape as any other wrong code.
+        bad_type = self.client.post(reverse("OTP Verification"), {"otp": "not-a-code"})
+        self.assertEqual(bad_type.status_code, 200)
+        self.assertContains(bad_type, "Invalid OTP")
+
+    def test_otp_matches_is_type_safe(self):
+        """The comparison helper only accepts numeric strings and exact values."""
+        self.assertTrue(otp_matches("123", [999, 123]))
+        self.assertTrue(otp_matches(" 0123 ", [123]))
+        self.assertFalse(otp_matches("123", [1234, None]))
+        self.assertFalse(otp_matches("", [123]))
+        self.assertFalse(otp_matches("12x", [123]))
+        self.assertFalse(otp_matches(None, [123]))
+        self.assertFalse(otp_matches(123, [123]))
 
     def test_crypto_failure_lab3_cookie_flags(self):
         """The clear-text-cookie lab keeps its tamperable value, plus flags."""

@@ -11,7 +11,6 @@ import subprocess
 import uuid
 from dataclasses import dataclass
 from io import BytesIO
-from random import randint
 from urllib.parse import urljoin
 
 import jwt
@@ -39,9 +38,10 @@ from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
 from .utility import (FETCH_TIMEOUT, MAX_FETCH_REDIRECTS,
                       InvalidStoredTextError, ResponseTooLargeError,
                       UnsafeExpressionError, UnsafePathError, customHash,
-                      fetch_allowed_hosts, filter_blog, read_bounded_response,
-                      safe_arithmetic_eval, safe_contained_path,
-                      safe_fetch_url, safe_host_target, safe_stored_text)
+                      fetch_allowed_hosts, filter_blog, generate_numeric_otp,
+                      otp_matches, read_bounded_response, safe_arithmetic_eval,
+                      safe_contained_path, safe_fetch_url, safe_host_target,
+                      safe_stored_text)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -598,7 +598,12 @@ def login_otp(request):
 def Otp(request):
     if request.method=="GET":
         email=request.GET.get('email')
-        otpN=randint(100,999)
+        # CWE-330: the code is drawn from the OS CSPRNG (secrets) instead of
+        # random.randint, whose Mersenne Twister state can be recovered from a
+        # few observed codes and used to predict the next one. The code stays a
+        # 3 digit integer, so the model column, the template and the lab's
+        # brute-force lesson are unchanged.
+        otpN=generate_numeric_otp()
         if email and otpN:
             if email=="admin@pygoat.com":
                 otp.objects.filter(id=2).update(otp=otpN)
@@ -633,7 +638,14 @@ def Otp(request):
     else:
         otpR=request.POST.get("otp")
         email=request.COOKIES.get("email")
-        if otp.objects.filter(email=email,otp=otpR) or otp.objects.filter(id=2,otp=otpR):
+        # The submitted code is compared in constant time against the codes
+        # stored for this email and for the admin record, so match timing does
+        # not leak digits and a non numeric submission fails closed instead of
+        # raising in the IntegerField lookup. Same accept/reject outcome as
+        # before, so the lab is still solved by brute forcing the 3 digit code.
+        stored_otps=list(otp.objects.filter(email=email).values_list("otp", flat=True))
+        stored_otps+=list(otp.objects.filter(id=2).values_list("otp", flat=True))
+        if otp_matches(otpR, stored_otps):
             # return HttpResponse("<h3>Login Success for email:::"+email+"</h3>")
             return render (request,"Lab/BrokenAuth/otp.html",{"email":email})
         else:
