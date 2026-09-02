@@ -25,6 +25,10 @@ This lab demonstrates the dangers of insecure deserialization through a user ses
 Set `INSEC_DES_LAB_SECRET_KEY` to the HMAC signing key. When it is unset, a
 random key is generated per process, which invalidates tokens from earlier runs.
 
+Set `INSEC_DES_LAB_CSRF_KEY` to the key used to sign CSRF tokens (a random
+per-process key is used when unset). Set `INSEC_DES_LAB_HTTPS=1` when the lab is
+served over TLS so the CSRF cookie is also marked `Secure`.
+
 ## Installation
 
 ### Using Docker (Recommended)
