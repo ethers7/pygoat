@@ -12,14 +12,18 @@
 function pygoatGetCookie(name) {
   var cookieValue = null;
   if (document.cookie && document.cookie !== "") {
-    var cookies = document.cookie.split(";");
-    for (var i = 0; i < cookies.length; i++) {
-      var cookie = cookies[i].trim();
-      if (cookie.substring(0, name.length + 1) === name + "=") {
-        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
-        break;
+    // Iterate the split cookie values directly rather than indexing the array
+    // with a loop counter, so no variable is ever used as a property key.
+    // Array.prototype.some keeps the original early exit on the first match.
+    var prefix = name + "=";
+    document.cookie.split(";").some(function (rawCookie) {
+      var cookie = rawCookie.trim();
+      if (cookie.substring(0, prefix.length) === prefix) {
+        cookieValue = decodeURIComponent(cookie.substring(prefix.length));
+        return true;
       }
-    }
+      return false;
+    });
   }
   return cookieValue;
 }
