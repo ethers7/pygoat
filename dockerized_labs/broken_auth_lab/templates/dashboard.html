@@ -49,7 +49,9 @@
         </div>
 
         <div style="text-align: right; margin-top: 20px;">
-            <button type="button" onclick="logout()">Logout</button>
+            <form method="POST" action="/logout">
+                <button type="submit">Logout</button>
+            </form>
         </div>
     </div>
 </div>
@@ -72,12 +74,4 @@
     margin: 0 5px;
 }
 </style>
-
-<script>
-function logout() {
-    // Clear the session cookie and redirect to login
-    document.cookie = "session=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-    window.location.href = "/lab";
-}
-</script>
 {% endblock %} 

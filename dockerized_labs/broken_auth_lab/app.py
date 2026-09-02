@@ -1,11 +1,20 @@
 from flask import Flask, render_template, request, redirect, url_for, make_response, flash
 import json
+import os
 import secrets
 from datetime import datetime, timedelta
 import base64
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'  # Vulnerable: Hardcoded secret key
+
+# CWE-614: the session cookie is only marked Secure when the lab is actually
+# served over HTTPS. The shipped docker-compose setup serves plain HTTP on
+# port 5000, so a hard-coded secure=True would make browsers drop the cookie
+# and break the lab; set BROKEN_AUTH_LAB_HTTPS=1 when fronting it with TLS.
+SESSION_COOKIE_SECURE = os.environ.get('BROKEN_AUTH_LAB_HTTPS', '').strip().lower() in (
+    '1', 'true', 'yes', 'on'
+)
 
 # Vulnerable: Storing user data in memory
 users = {
@@ -46,10 +55,24 @@ def login():
         
         if remember_me:
             # Vulnerable: Insecure "Remember Me" implementation
-            response.set_cookie('session', session_token, max_age=30*24*60*60)
+            response.set_cookie(
+                'session',
+                session_token,
+                max_age=30*24*60*60,
+                httponly=True,
+                samesite='Lax',
+                secure=SESSION_COOKIE_SECURE,
+            )
         else:
-            response.set_cookie('session', session_token)
-            
+            response.set_cookie(
+                'session',
+                session_token,
+                httponly=True,
+                samesite='Lax',
+                secure=SESSION_COOKIE_SECURE,
+            )
+
+
         return response
     
     flash('Invalid username or password')
@@ -120,6 +143,14 @@ def dashboard():
         pass
     
     return redirect(url_for('lab'))
+
+@app.route('/logout', methods=['POST'])
+def logout():
+    # The session cookie is HttpOnly, so it cannot be cleared from JavaScript;
+    # the server clears it here instead.
+    response = make_response(redirect(url_for('lab')))
+    response.delete_cookie('session', samesite='Lax', secure=SESSION_COOKIE_SECURE)
+    return response
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)  # Vulnerable: Debug mode enabled in production 
