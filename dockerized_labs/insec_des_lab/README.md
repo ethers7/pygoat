@@ -29,6 +29,14 @@ Set `INSEC_DES_LAB_CSRF_KEY` to the key used to sign CSRF tokens (a random
 per-process key is used when unset). Set `INSEC_DES_LAB_HTTPS=1` when the lab is
 served over TLS so the CSRF cookie is also marked `Secure`.
 
+Set `INSEC_DES_LAB_HOST` to the address the development server binds when the app
+is started with `python main.py`. It defaults to `127.0.0.1`, so a direct run is
+reachable only from the machine itself. The container image sets it to `0.0.0.0`
+because a process inside a container must bind a container-visible address for
+the published port to work, so `docker-compose up --build` still serves the lab
+on http://localhost:8080. Only set it to `0.0.0.0` outside a container if you
+accept exposing this deliberately vulnerable app to your network.
+
 ## Installation
 
 ### Using Docker (Recommended)
