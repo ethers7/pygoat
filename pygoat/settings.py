@@ -169,4 +169,11 @@ SOCIALACCOUNT_PROVIDERS = {
 }
 
 SECRET_COOKIE_KEY = "PYGOAT"
+
+# Signing key for the CSRF lab JWT cookie (introduction/mitre.py).
+# Read from the environment so no signing secret is hard coded in the source.
+# The fallback is the local development SECRET_KEY: it is deliberately not a
+# production value, and it keeps the key stable across gunicorn workers so a
+# cookie signed by one worker still verifies on another.
+CSRF_LAB_JWT_KEY = os.environ.get('CSRF_LAB_JWT_KEY') or SECRET_KEY
 CSRF_TRUSTED_ORIGINS = ["http://127.0.0.1:8000","http://0.0.0.0:8000","http://172.16.189.10"]
