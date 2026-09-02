@@ -38,11 +38,22 @@ event3 = function(){
         let data = JSON.parse(result);  // parse JSON string into object
         console.log(data.logs);
         document.getElementById("a9_d3").style.display = 'flex';
-        for (var i = 0; i < data.logs.length; i++) {
-            var li = document.createElement("li");
-            li.innerHTML = data.logs[i];
-            document.getElementById("a9_d3").appendChild(li);
+        if (!data.logs) {
+            // The API validates the submitted modules and answers with a
+            // message instead of the logs when the input is rejected.
+            document.getElementById("a9_d3").innerText = data.message;
+            return;
         }
+        // Iterate the values the API returned instead of reading them back by
+        // computed index, so nothing from the response is used as a property
+        // key. Array.isArray keeps the old "render nothing" behaviour when the
+        // response is not the expected JSON list.
+        var logs = Array.isArray(data.logs) ? data.logs : [];
+        logs.forEach(function(log) {
+            var li = document.createElement("li");
+            li.innerHTML = log;
+            document.getElementById("a9_d3").appendChild(li);
+        });
     })
     .catch(error => console.log('error', error));
     }
