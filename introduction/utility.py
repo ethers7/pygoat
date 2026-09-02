@@ -1,5 +1,8 @@
+import ast
 import hashlib
 import ipaddress
+import math
+import operator
 import os
 import re
 import socket
@@ -133,6 +136,101 @@ def safe_fetch_url(value):
     # Rebuild from validated parts: no credentials, no fragment, no alternate
     # port, host taken from the allowlist comparison.
     return urlunsplit((scheme, host, parsed.path, parsed.query, ''))
+
+
+# Arithmetic-only expression evaluator for the calculator labs (CWE-94/95).
+# Untrusted input is parsed with ast.parse(mode='eval') and then interpreted
+# against the explicit node/operator allowlist below, so it is never handed to
+# eval/exec/compile-as-code. Names, attributes, calls, subscripts, lambdas,
+# comprehensions, imports and every other node type are rejected, which makes
+# code execution structurally impossible rather than merely filtered.
+_ALLOWED_BINARY_OPERATORS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+}
+
+_ALLOWED_UNARY_OPERATORS = {
+    ast.UAdd: operator.pos,
+    ast.USub: operator.neg,
+}
+
+# Hard limits so a syntactically valid but hostile expression (9**9**9, deeply
+# nested parentheses) cannot burn CPU or memory as a denial of service.
+MAX_EXPRESSION_LENGTH = 120
+MAX_EXPRESSION_NODES = 60
+MAX_EXPRESSION_DEPTH = 20
+_MAX_EXPONENT = 64
+_MAX_MAGNITUDE = 10 ** 18
+
+
+class UnsafeExpressionError(ValueError):
+    """Raised when input is not a plain, bounded arithmetic expression."""
+
+
+def _bounded_number(value):
+    """Reject non-finite or oversized intermediate results."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise UnsafeExpressionError('only numeric values are supported')
+    if isinstance(value, float) and not math.isfinite(value):
+        raise UnsafeExpressionError('result is not a finite number')
+    if abs(value) > _MAX_MAGNITUDE:
+        raise UnsafeExpressionError('result is out of the supported range')
+    return value
+
+
+def _eval_expression_node(node, depth=0):
+    """Interpret one allowlisted arithmetic node; refuse everything else."""
+    if depth > MAX_EXPRESSION_DEPTH:
+        raise UnsafeExpressionError('expression is nested too deeply')
+    if isinstance(node, ast.Constant):
+        return _bounded_number(node.value)
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _ALLOWED_UNARY_OPERATORS:
+        operand = _eval_expression_node(node.operand, depth + 1)
+        return _bounded_number(_ALLOWED_UNARY_OPERATORS[type(node.op)](operand))
+    if isinstance(node, ast.BinOp) and type(node.op) in _ALLOWED_BINARY_OPERATORS:
+        left = _eval_expression_node(node.left, depth + 1)
+        right = _eval_expression_node(node.right, depth + 1)
+        if isinstance(node.op, ast.Pow) and (
+            abs(right) > _MAX_EXPONENT or abs(left) > _MAX_EXPONENT
+        ):
+            raise UnsafeExpressionError('exponent is too large')
+        try:
+            result = _ALLOWED_BINARY_OPERATORS[type(node.op)](left, right)
+        except ZeroDivisionError:
+            raise UnsafeExpressionError('division by zero')
+        except (ArithmeticError, ValueError):
+            raise UnsafeExpressionError('result is out of the supported range')
+        return _bounded_number(result)
+    raise UnsafeExpressionError('only numbers and + - * / // % ** are supported')
+
+
+def safe_arithmetic_eval(expression):
+    """Evaluate an untrusted arithmetic expression without eval/exec (CWE-95).
+
+    Returns the numeric result of a bounded arithmetic expression built from
+    numeric literals, ``+ - * / // % **``, unary sign and parentheses. Raises
+    :class:`UnsafeExpressionError` for anything else so callers fail closed and
+    can report a handled error message.
+    """
+    if not isinstance(expression, str):
+        raise UnsafeExpressionError('an expression is required')
+    candidate = expression.strip()
+    if not candidate:
+        raise UnsafeExpressionError('an expression is required')
+    if len(candidate) > MAX_EXPRESSION_LENGTH:
+        raise UnsafeExpressionError('expression is too long')
+    try:
+        tree = ast.parse(candidate, mode='eval')
+    except (SyntaxError, ValueError, MemoryError, RecursionError):
+        raise UnsafeExpressionError('expression is not valid arithmetic')
+    if sum(1 for _ in ast.walk(tree)) > MAX_EXPRESSION_NODES:
+        raise UnsafeExpressionError('expression is too complex')
+    return _eval_expression_node(tree.body)
 
 
 def ssrf_code_converter(code):

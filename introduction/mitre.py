@@ -11,7 +11,8 @@ from django.views.decorators.csrf import csrf_exempt
 from pygoat.settings import CSRF_LAB_JWT_KEY
 
 from .models import CSRF_user_tbl
-from .utility import safe_host_target
+from .utility import (UnsafeExpressionError, safe_arithmetic_eval,
+                      safe_host_target)
 from .views import authentication_decorator
 
 # import os
@@ -218,7 +219,14 @@ def csrf_transfer_monei_api(request,recipent,amount):
 def mitre_lab_25_api(request):
     if request.method == "POST":
         expression = request.POST.get('expression')
-        result = eval(expression)
+        # Calculator lab: the submitted expression is still evaluated, but only
+        # as bounded arithmetic. Request data never reaches eval/exec (CWE-95).
+        try:
+            result = safe_arithmetic_eval(expression)
+        except UnsafeExpressionError as error:
+            return JsonResponse(
+                {'result': 'Invalid expression: {}'.format(error)}, status=400
+            )
         return JsonResponse({'result': result})
     else:
         return redirect('/mitre/25/lab/')

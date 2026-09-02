@@ -36,8 +36,9 @@ from requests.structures import CaseInsensitiveDict
 from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
-from .utility import (MAX_FETCH_REDIRECTS, customHash, fetch_allowed_hosts,
-                      filter_blog, safe_fetch_url, safe_host_target)
+from .utility import (MAX_FETCH_REDIRECTS, UnsafeExpressionError, customHash,
+                      fetch_allowed_hosts, filter_blog, safe_arithmetic_eval,
+                      safe_fetch_url, safe_host_target)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -497,14 +498,15 @@ def cmd_lab2(request):
     if request.user.is_authenticated:
         if (request.method=="POST"):
             val=request.POST.get('val')
-            
-            print(val)
+
+            # The lab still evaluates the submitted expression, but only as
+            # bounded arithmetic over numeric literals: request data is never
+            # executed as Python code (CWE-95).
             try:
-                output = eval(val)
-            except:
-                output = "Something went wrong"
+                output = safe_arithmetic_eval(val)
+            except UnsafeExpressionError as error:
+                output = "Invalid expression: {}".format(error)
                 return render(request,'Lab/CMD/cmd_lab2.html',{"output":output})
-            print("Output = ", output)
             return render(request,'Lab/CMD/cmd_lab2.html',{"output":output})
         else:
             return render(request, 'Lab/CMD/cmd_lab2.html')

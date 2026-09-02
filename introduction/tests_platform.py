@@ -15,7 +15,8 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from .models import comments
-from .utility import safe_fetch_url, safe_host_target
+from .utility import (UnsafeExpressionError, safe_arithmetic_eval,
+                      safe_fetch_url, safe_host_target)
 
 
 class _StubResponse:
@@ -251,6 +252,70 @@ class PlatformRegressionTests(TestCase):
         )
         self.assertEqual(r.status_code, 400)
         self.assertEqual(comments.objects.get(id=1).comment, "old")
+
+    def test_safe_arithmetic_eval_computes_expressions(self):
+        """The calculator labs still evaluate legitimate arithmetic."""
+        self.assertEqual(safe_arithmetic_eval("7*7"), 49)
+        self.assertEqual(safe_arithmetic_eval(" (2 + 3) * -4 "), -20)
+        self.assertEqual(safe_arithmetic_eval("7/2"), 3.5)
+        self.assertEqual(safe_arithmetic_eval("2**10"), 1024)
+        self.assertEqual(safe_arithmetic_eval("7//2 + 7%2"), 4)
+
+    def test_safe_arithmetic_eval_rejects_code_execution(self):
+        """CWE-95 regression: no name, call or import ever gets interpreted."""
+        for payload in (
+            None,
+            "",
+            "   ",
+            "__import__('os').system('id')",
+            "print(1)",
+            "os.popen('id').read()",
+            "().__class__.__bases__[0].__subclasses__()",
+            "[x for x in (1, 2)]",
+            "lambda: 1",
+            "'a'*3",
+            "9**9**9",
+            "1 if True else 2",
+            "1 == 1",
+            "x + 1",
+            "1;2",
+        ):
+            with self.assertRaises(UnsafeExpressionError, msg=repr(payload)):
+                safe_arithmetic_eval(payload)
+
+    def test_cmd_lab2_evaluates_arithmetic(self):
+        self.client.force_login(self.user)
+        r = self.client.post("/cmd_lab2", {"val": "7*7"})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "49")
+
+    def test_cmd_lab2_rejects_code_payloads(self):
+        """CWE-95 regression: injected Python is refused, not executed."""
+        self.client.force_login(self.user)
+        for payload in (
+            "__import__('os').system('id')",
+            "open('/etc/passwd').read()",
+            "().__class__.__bases__",
+        ):
+            r = self.client.post("/cmd_lab2", {"val": payload})
+            self.assertEqual(r.status_code, 200, msg=payload)
+            self.assertContains(r, "Invalid expression", msg_prefix=payload)
+
+    def test_mitre_lab_25_api_evaluates_arithmetic(self):
+        r = self.client.post("/mitre/25/lab/api", {"expression": "(2+3)*4"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["result"], 20)
+
+    def test_mitre_lab_25_api_rejects_code_payloads(self):
+        """CWE-95 regression: the calculator API never executes Python."""
+        for payload in (
+            "__import__('os').system('id')",
+            "eval('1+1')",
+            "globals()",
+        ):
+            r = self.client.post("/mitre/25/lab/api", {"expression": payload})
+            self.assertEqual(r.status_code, 400, msg=payload)
+            self.assertIn("Invalid expression", r.json()["result"])
 
     def test_login_post(self):
         r = self.client.post(
