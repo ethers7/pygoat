@@ -177,3 +177,14 @@ SECRET_COOKIE_KEY = "PYGOAT"
 # cookie signed by one worker still verifies on another.
 CSRF_LAB_JWT_KEY = os.environ.get('CSRF_LAB_JWT_KEY') or SECRET_KEY
 CSRF_TRUSTED_ORIGINS = ["http://127.0.0.1:8000","http://0.0.0.0:8000","http://172.16.189.10"]
+
+# CWE-614: the cookies the lesson views hand to the browser (introduction/views.py,
+# introduction/mitre.py) are only marked Secure when PyGoat is really served over
+# HTTPS. The shipped docker-compose setup runs gunicorn on plain HTTP (port 8000),
+# so a hard-coded secure=True would make browsers drop every lab cookie and break
+# the labs; set PYGOAT_HTTPS=1 (or true/yes/on) when fronting the app with TLS so
+# the same cookies are never sent in clear text. HttpOnly and SameSite are applied
+# unconditionally at the call sites and do not depend on this switch.
+LAB_COOKIE_SECURE = os.environ.get('PYGOAT_HTTPS', '').strip().lower() in (
+    '1', 'true', 'yes', 'on'
+)

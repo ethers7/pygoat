@@ -6,7 +6,7 @@ import jwt
 from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
 
-from pygoat.settings import CSRF_LAB_JWT_KEY
+from pygoat.settings import CSRF_LAB_JWT_KEY, LAB_COOKIE_SECURE
 
 from .models import CSRF_user_tbl, verify_lab_password
 from .utility import (UnsafeExpressionError, safe_arithmetic_eval,
@@ -172,7 +172,19 @@ def csrf_lab_login(request):
             }
             cookie = jwt.encode(payload, CSRF_LAB_JWT_KEY, algorithm='HS256')
             response = redirect("/mitre/9/lab/transaction")
-            response.set_cookie('auth_cookiee', cookie)
+            # CWE-614/CWE-1004: the session JWT is only decoded server side, so it is
+            # kept out of reach of page scripts and out of clear-text traffic once
+            # PYGOAT_HTTPS is set. SameSite=Lax is what browsers already default to
+            # for a cookie with no SameSite attribute, and the lab's transfer is a
+            # top-level GET navigation (see templates/mitre/csrf_dashboard.html),
+            # which Lax still sends, so the CSRF exercise keeps working.
+            response.set_cookie(
+                'auth_cookiee',
+                cookie,
+                httponly=True,
+                samesite='Lax',
+                secure=LAB_COOKIE_SECURE,
+            )
             return response
         else :
             return redirect('/mitre/9/lab/login')
