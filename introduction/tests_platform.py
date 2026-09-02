@@ -12,6 +12,8 @@ from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
+from .utility import safe_host_target
+
 
 @override_settings(
     DEBUG=True,
@@ -86,6 +88,39 @@ class PlatformRegressionTests(TestCase):
             self.client.login(username="newgate", password=self.PASSWORD)
         )
         self.assertEqual(self.client.get("/").status_code, 200)
+
+    def test_cmd_lab_rejects_shell_metacharacters(self):
+        """CWE-78 regression: injected payloads never reach a shell."""
+        self.client.force_login(self.user)
+        for payload in (
+            "example.com; id",
+            "example.com && whoami",
+            "example.com | cat /etc/passwd",
+            "$(id).example.com",
+            "`id`",
+        ):
+            r = self.client.post("/cmd_lab", {"domain": payload, "os": "lin"})
+            self.assertEqual(r.status_code, 200, msg=payload)
+            self.assertContains(r, "Invalid domain name", msg_prefix=payload)
+
+    def test_safe_host_target_accepts_plain_hosts(self):
+        self.assertEqual(safe_host_target("example.com"), "example.com")
+        self.assertEqual(safe_host_target(" 127.0.0.1 "), "127.0.0.1")
+        self.assertEqual(
+            safe_host_target("10.0.0.0/24", allow_networks=True), "10.0.0.0/24"
+        )
+
+    def test_safe_host_target_rejects_injection(self):
+        for payload in (
+            None,
+            "",
+            "   ",
+            "example.com; id",
+            "example.com\nid",
+            "example.com/../etc",
+            "10.0.0.0/24",
+        ):
+            self.assertIsNone(safe_host_target(payload), msg=repr(payload))
 
     def test_login_post(self):
         r = self.client.post(

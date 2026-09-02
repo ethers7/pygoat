@@ -1,11 +1,44 @@
 import hashlib
+import ipaddress
 import os
+import re
 import uuid
 
 from .models import *
 
+# Plain DNS hostname: labels of alphanumerics/hyphens, no shell metacharacters,
+# no whitespace, no path or scheme parts.
+_HOSTNAME_RE = re.compile(
+    r'(?=.{1,253}\Z)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?'
+    r'(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\Z'
+)
 
-# import re
+
+def safe_host_target(value, allow_networks=False):
+    """Validate an untrusted host argument before it reaches a lookup tool.
+
+    Returns the normalised IP address, CIDR network (only when
+    ``allow_networks`` is set) or hostname, and ``None`` when the value is not
+    a plain host. Callers must still pass the result as its own argv element
+    and never build a shell command string from it.
+    """
+    if not isinstance(value, str):
+        return None
+    target = value.strip()
+    if not target:
+        return None
+    try:
+        return str(ipaddress.ip_address(target))
+    except ValueError:
+        pass
+    if allow_networks and '/' in target:
+        try:
+            return str(ipaddress.ip_network(target, strict=False))
+        except ValueError:
+            return None
+    if _HOSTNAME_RE.match(target):
+        return target
+    return None
 def ssrf_code_converter(code):
     list_input = code.split("\n")
     del_l = []
