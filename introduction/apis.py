@@ -64,8 +64,15 @@ def log_function_checker(request):
         # requests: send the CSRF cookie plus the matching X-CSRFToken header,
         # which is Django's documented pattern for non-browser clients.
         csrf_token = get_token(request)
-        log_code = request.POST.get('log_code')
-        api_code = request.POST.get('api_code')
+        # CWE-915: the submitted lab modules replace files on disk, so both
+        # fields are validated at this boundary (present, bounded, control
+        # character free and syntactically valid Python) and rejected with a
+        # 400 before anything is written.
+        try:
+            log_code = safe_python_source(request.POST.get('log_code'), field='log_code')
+            api_code = safe_python_source(request.POST.get('api_code'), field='api_code')
+        except InvalidStoredTextError as error:
+            return JsonResponse({"message": str(error)}, status = 400)
         dirname = os.path.dirname(__file__)
         log_filename = os.path.join(dirname, "playground/A9/main.py")
         api_filename = os.path.join(dirname, "playground/A9/api.py")
@@ -128,8 +135,13 @@ def A6_disscussion_api(request):
 def A6_disscussion_api_2(request):
     if request.method != 'POST':
         return JsonResponse({"message":"method not allowed"},status = 405)
+    # CWE-915: only bounded, control character free, syntactically valid Python
+    # is allowed to replace the lab module on disk.
     try:
-        code = request.POST.get('code')
+        code = safe_python_source(request.POST.get('code'))
+    except InvalidStoredTextError as error:
+        return JsonResponse({"message": str(error)}, status = 400)
+    try:
         dirname = os.path.dirname(__file__)
         filename = os.path.join(dirname, "playground/A6/utility.py")
         f = open(filename,"w")
