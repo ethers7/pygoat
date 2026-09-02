@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
 from random import randint
+from urllib.parse import urljoin
 from xml.dom.pulldom import START_ELEMENT, parseString
 from xml.sax import make_parser
 from xml.sax.handler import feature_external_ges
@@ -36,7 +37,8 @@ from requests.structures import CaseInsensitiveDict
 from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
-from .utility import customHash, filter_blog, safe_host_target
+from .utility import (MAX_FETCH_REDIRECTS, customHash, fetch_allowed_hosts,
+                      filter_blog, safe_fetch_url, safe_host_target)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -987,16 +989,42 @@ def ssrf_target(request):
 
 @authentication_decorator
 def ssrf_lab2(request):
+    allowed_hosts = sorted(fetch_allowed_hosts())
     if request.method == "GET":
-        return render(request, "Lab/ssrf/ssrf_lab2.html")
+        return render(request, "Lab/ssrf/ssrf_lab2.html", {"allowed_hosts": allowed_hosts})
 
     elif request.method == "POST":
-        url = request.POST["url"]
+        # SSRF (CWE-918): the user supplied URL is only fetched when it passes
+        # the scheme/host allowlist and resolves to a public address, and every
+        # redirect hop is re-validated instead of being followed blindly.
+        target = safe_fetch_url(request.POST.get("url"))
+        if target is None:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {
+                "error": "URL not allowed. Use http/https and one of these hosts: "
+                         + ", ".join(allowed_hosts),
+                "allowed_hosts": allowed_hosts,
+            })
         try:
-            response = requests.get(url)
-            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
-            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+            for _ in range(MAX_FETCH_REDIRECTS + 1):
+                response = requests.get(target, timeout=10, allow_redirects=False)
+                if not response.is_redirect:
+                    break
+                target = safe_fetch_url(urljoin(target, response.headers.get("Location", "")))
+                if target is None:
+                    return render(request, "Lab/ssrf/ssrf_lab2.html", {
+                        "error": "Blocked a redirect to a destination that is not allowlisted",
+                        "allowed_hosts": allowed_hosts,
+                    })
+            else:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {
+                    "error": "Too many redirects", "allowed_hosts": allowed_hosts})
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {
+                "response": response.content.decode(errors="replace"),
+                "allowed_hosts": allowed_hosts,
+            })
+        except requests.RequestException:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {
+                "error": "Invalid URL", "allowed_hosts": allowed_hosts})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
 def ssti(request):

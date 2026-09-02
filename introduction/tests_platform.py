@@ -8,11 +8,22 @@ DEBUG=False, so {% static %} blows up without collectstatic (and collectstatic
 fails upstream on a missing font). Gunicorn smoke uses DEBUG=True. Tests force
 plain StaticFilesStorage so we gate routes/auth, not WhiteNoise manifests.
 """
+from unittest.mock import patch
+
 from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from .utility import safe_host_target
+from .utility import safe_fetch_url, safe_host_target
+
+
+class _StubResponse:
+    """Minimal stand-in for requests.Response used by the SSRF lab tests."""
+
+    def __init__(self, content=b"", headers=None, is_redirect=False):
+        self.content = content
+        self.headers = headers or {}
+        self.is_redirect = is_redirect
 
 
 @override_settings(
@@ -121,6 +132,86 @@ class PlatformRegressionTests(TestCase):
             "10.0.0.0/24",
         ):
             self.assertIsNone(safe_host_target(payload), msg=repr(payload))
+
+    @patch("introduction.utility.socket.getaddrinfo")
+    def test_safe_fetch_url_accepts_allowlisted_public_host(self, getaddrinfo):
+        getaddrinfo.return_value = [(2, 1, 6, "", ("93.184.216.34", 80))]
+        self.assertEqual(
+            safe_fetch_url(" http://example.com/blog?id=1#frag "),
+            "http://example.com/blog?id=1",
+        )
+
+    @patch("introduction.utility.socket.getaddrinfo")
+    def test_safe_fetch_url_rejects_host_resolving_internally(self, getaddrinfo):
+        """CWE-918: resolve-then-validate, an allowed name may not point inside."""
+        for address in ("127.0.0.1", "169.254.169.254", "10.1.2.3", "::1"):
+            getaddrinfo.return_value = [(2, 1, 6, "", (address, 80))]
+            self.assertIsNone(
+                safe_fetch_url("http://example.com/"), msg=address
+            )
+
+    def test_safe_fetch_url_rejects_non_allowlisted_targets(self):
+        for payload in (
+            None,
+            "",
+            "   ",
+            "file:///etc/passwd",
+            "gopher://example.com/",
+            "http://127.0.0.1:8000/ssrf_target",
+            "http://localhost/ssrf_target",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://[::1]/ssrf_target",
+            "http://evil.example.net/",
+            "http://example.com.evil.net/",
+            "http://example.com:8000/",
+            "http://user:pass@example.com/",
+        ):
+            self.assertIsNone(safe_fetch_url(payload), msg=repr(payload))
+
+    @patch("introduction.views.requests.get")
+    def test_ssrf_lab2_blocks_internal_targets(self, requests_get):
+        """CWE-918 regression: internal destinations never reach requests."""
+        self.client.force_login(self.user)
+        for payload in (
+            "http://127.0.0.1:8000/ssrf_target",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://10.0.0.5/",
+            "file:///etc/passwd",
+            "http://evil.example.net/",
+        ):
+            r = self.client.post("/ssrf_lab2", {"url": payload})
+            self.assertEqual(r.status_code, 200, msg=payload)
+            self.assertContains(r, "not allowed", msg_prefix=payload)
+        requests_get.assert_not_called()
+
+    @patch("introduction.views.requests.get")
+    @patch("introduction.utility.socket.getaddrinfo")
+    def test_ssrf_lab2_fetches_allowlisted_url(self, getaddrinfo, requests_get):
+        """The lab still fetches and displays an allowed destination."""
+        getaddrinfo.return_value = [(2, 1, 6, "", ("93.184.216.34", 80))]
+        requests_get.return_value = _StubResponse(content=b"allowed blog body")
+        self.client.force_login(self.user)
+        r = self.client.post("/ssrf_lab2", {"url": "http://example.com/blog"})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "allowed blog body")
+        args, kwargs = requests_get.call_args
+        self.assertEqual(args[0], "http://example.com/blog")
+        self.assertFalse(kwargs["allow_redirects"])
+        self.assertTrue(kwargs["timeout"])
+
+    @patch("introduction.views.requests.get")
+    @patch("introduction.utility.socket.getaddrinfo")
+    def test_ssrf_lab2_blocks_redirect_to_internal_target(self, getaddrinfo, requests_get):
+        getaddrinfo.return_value = [(2, 1, 6, "", ("93.184.216.34", 80))]
+        requests_get.return_value = _StubResponse(
+            headers={"Location": "http://169.254.169.254/latest/meta-data/"},
+            is_redirect=True,
+        )
+        self.client.force_login(self.user)
+        r = self.client.post("/ssrf_lab2", {"url": "http://example.com/blog"})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Blocked a redirect")
+        self.assertEqual(requests_get.call_count, 1)
 
     def test_login_post(self):
         r = self.client.post(

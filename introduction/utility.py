@@ -2,7 +2,9 @@ import hashlib
 import ipaddress
 import os
 import re
+import socket
 import uuid
+from urllib.parse import urlsplit, urlunsplit
 
 from .models import *
 
@@ -39,6 +41,100 @@ def safe_host_target(value, allow_networks=False):
     if _HOSTNAME_RE.match(target):
         return target
     return None
+
+
+# Positive allowlist of destinations the server may fetch on behalf of a
+# request (CWE-918). Only these hosts, only http/https, only the default
+# port. Deployments can override it with a comma separated list in the
+# PYGOAT_FETCH_ALLOWED_HOSTS environment variable.
+DEFAULT_FETCH_ALLOWED_HOSTS = (
+    'example.com',
+    'www.example.com',
+    'owasp.org',
+    'www.owasp.org',
+)
+
+# Redirects are re-validated, never followed blindly, and are bounded.
+MAX_FETCH_REDIRECTS = 3
+
+_FETCH_ALLOWED_SCHEME_PORTS = {'http': 80, 'https': 443}
+
+
+def fetch_allowed_hosts():
+    """Return the frozenset of hosts the server is allowed to fetch."""
+    configured = os.environ.get('PYGOAT_FETCH_ALLOWED_HOSTS', '')
+    hosts = [
+        host.strip().lower().rstrip('.')
+        for host in configured.split(',')
+        if host.strip()
+    ]
+    return frozenset(hosts or DEFAULT_FETCH_ALLOWED_HOSTS)
+
+
+def _is_public_address(address):
+    """True only for addresses outside internal and reserved ranges."""
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    mapped = getattr(ip, 'ipv4_mapped', None)
+    if mapped is not None:
+        ip = mapped
+    return not (
+        ip.is_private          # RFC1918 / unique-local, plus loopback for IPv4
+        or ip.is_loopback
+        or ip.is_link_local    # includes 169.254.169.254 cloud metadata
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def safe_fetch_url(value):
+    """Validate an untrusted URL before the server fetches it (CWE-918, SSRF).
+
+    Returns a normalised http(s) URL only when its host is on
+    :func:`fetch_allowed_hosts`, no credentials are embedded, the port is the
+    scheme default and every address the host resolves to is a public one
+    (resolve-then-validate, so an allowlisted name cannot point at loopback,
+    link-local cloud metadata or a private range). Returns ``None`` otherwise
+    so callers fail closed. Callers must also re-validate each redirect
+    target with this helper instead of following redirects blindly.
+    """
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip()
+    if not candidate:
+        return None
+    try:
+        parsed = urlsplit(candidate)
+        host = (parsed.hostname or '').lower().rstrip('.')
+        port = parsed.port
+    except ValueError:
+        return None
+    scheme = parsed.scheme.lower()
+    if scheme not in _FETCH_ALLOWED_SCHEME_PORTS:
+        return None
+    if parsed.username or parsed.password:
+        return None
+    if host not in fetch_allowed_hosts():
+        return None
+    default_port = _FETCH_ALLOWED_SCHEME_PORTS[scheme]
+    if port not in (None, default_port):
+        return None
+    try:
+        addresses = socket.getaddrinfo(host, default_port, proto=socket.IPPROTO_TCP)
+    except (OSError, UnicodeError):
+        return None
+    if not addresses:
+        return None
+    if not all(_is_public_address(info[4][0]) for info in addresses):
+        return None
+    # Rebuild from validated parts: no credentials, no fragment, no alternate
+    # port, host taken from the allowlist comparison.
+    return urlunsplit((scheme, host, parsed.path, parsed.query, ''))
+
+
 def ssrf_code_converter(code):
     list_input = code.split("\n")
     del_l = []
