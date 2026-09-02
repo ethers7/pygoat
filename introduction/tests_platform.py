@@ -14,6 +14,7 @@ from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
+from .models import comments
 from .utility import safe_fetch_url, safe_host_target
 
 
@@ -212,6 +213,44 @@ class PlatformRegressionTests(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertContains(r, "Blocked a redirect")
         self.assertEqual(requests_get.call_count, 1)
+
+    def test_xxe_parse_stores_well_formed_comment(self):
+        """The XXE lab still parses plain XML and stores the comment."""
+        comments.objects.create(id=1, name="System", comment="old")
+        r = self.client.post(
+            "/xxe_parse",
+            data="<?xml version='1.0'?><comm><text>hello world</text></comm>",
+            content_type="text/xml",
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(comments.objects.get(id=1).comment, "hello world")
+
+    def test_xxe_parse_rejects_external_entity_payload(self):
+        """CWE-611 regression: DTD/entity payloads are refused, not expanded."""
+        comments.objects.create(id=1, name="System", comment="old")
+        payloads = (
+            '<?xml version="1.0"?>'
+            '<!DOCTYPE comm [<!ELEMENT comm (#PCDATA)>'
+            '<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
+            "<comm><text>&xxe;</text></comm>",
+            '<?xml version="1.0"?>'
+            '<!DOCTYPE comm [<!ENTITY a "expanded">]>'
+            "<comm><text>&a;</text></comm>",
+        )
+        for payload in payloads:
+            r = self.client.post(
+                "/xxe_parse", data=payload, content_type="text/xml"
+            )
+            self.assertEqual(r.status_code, 400, msg=payload)
+            self.assertEqual(comments.objects.get(id=1).comment, "old")
+
+    def test_xxe_parse_rejects_malformed_xml(self):
+        comments.objects.create(id=1, name="System", comment="old")
+        r = self.client.post(
+            "/xxe_parse", data="<comm><text>oops", content_type="text/xml"
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(comments.objects.get(id=1).comment, "old")
 
     def test_login_post(self):
         r = self.client.post(
