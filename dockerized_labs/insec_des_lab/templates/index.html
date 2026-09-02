@@ -61,6 +61,7 @@
         <div class="section">
             <h2>Create User</h2>
             <form action="/serialize" method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="text" name="username" placeholder="Enter username" required>
                 <button type="submit">Create User</button>
             </form>
@@ -69,6 +70,7 @@
         <div class="section">
             <h2>View Admin Content</h2>
             <form action="/deserialize" method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <textarea name="serialized_data" placeholder="Enter the signed token from the previous step" required></textarea>
                 <button type="submit">View Content</button>
             </form>

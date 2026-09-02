@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request
+from flask import Flask, abort, g, render_template, request
 import base64
 import binascii
 import hashlib
@@ -16,6 +16,93 @@ app = Flask(__name__)
 TOKEN_SIGNING_KEY = (
     os.environ.get('INSEC_DES_LAB_SECRET_KEY', '').encode() or secrets.token_bytes(32)
 )
+
+# CWE-352: Jinja2 has no {% csrf_token %} tag, so this lab issues its own
+# per-visitor CSRF token: a random nonce plus an HMAC-SHA256 signature, stored in
+# a cookie and rendered into every state-changing form. A cross-site page can
+# neither read the cookie nor mint a correctly signed value, so forged POSTs are
+# rejected below. The signing key is read from the environment; when unset a
+# random per-process key is used, which only invalidates tokens from earlier runs.
+CSRF_COOKIE_NAME = 'csrf_token'
+CSRF_FORM_FIELD = 'csrf_token'
+CSRF_PROTECTED_METHODS = ('POST', 'PUT', 'PATCH', 'DELETE')
+CSRF_SIGNING_KEY = (
+    os.environ.get('INSEC_DES_LAB_CSRF_KEY', '').encode() or secrets.token_bytes(32)
+)
+# The shipped docker-compose setup serves plain HTTP on port 8080, so the cookie
+# is only marked Secure when the lab is actually fronted with TLS.
+CSRF_COOKIE_SECURE = os.environ.get('INSEC_DES_LAB_HTTPS', '').strip().lower() in (
+    '1', 'true', 'yes', 'on'
+)
+
+# CWE-668: the development server binds loopback only, so a `python main.py` run
+# on a workstation or shared host is not reachable from the network. Binding
+# every interface is a deployment decision, not a source-code default: the
+# container image sets INSEC_DES_LAB_HOST=0.0.0.0 (see Dockerfile) because a
+# process inside a container must bind a container-visible address for the
+# published port to work.
+LISTEN_HOST = os.environ.get('INSEC_DES_LAB_HOST', '').strip() or '127.0.0.1'
+
+
+def _csrf_signature(nonce: str) -> str:
+    return hmac.new(CSRF_SIGNING_KEY, nonce.encode(), hashlib.sha256).hexdigest()
+
+
+def _issue_csrf_token() -> str:
+    nonce = secrets.token_urlsafe(32)
+    return '{}.{}'.format(nonce, _csrf_signature(nonce))
+
+
+def _is_valid_csrf_token(token: str) -> bool:
+    nonce, separator, signature = token.partition('.')
+    if not separator or not nonce or not signature:
+        return False
+    return hmac.compare_digest(signature, _csrf_signature(nonce))
+
+
+def _current_csrf_token() -> str:
+    """Return this visitor's CSRF token, issuing one when needed."""
+    token = getattr(g, 'csrf_token', None)
+    if token is None:
+        token = request.cookies.get(CSRF_COOKIE_NAME, '')
+        if not _is_valid_csrf_token(token):
+            token = _issue_csrf_token()
+            g.csrf_token_is_new = True
+        g.csrf_token = token
+    return token
+
+
+@app.context_processor
+def inject_csrf_token():
+    # Templates call {{ csrf_token() }} inside every POST form.
+    return {'csrf_token': _current_csrf_token}
+
+
+@app.before_request
+def verify_csrf_token():
+    if request.method not in CSRF_PROTECTED_METHODS:
+        return
+    cookie_token = request.cookies.get(CSRF_COOKIE_NAME, '')
+    form_token = request.form.get(CSRF_FORM_FIELD, '')
+    if not cookie_token or not form_token:
+        abort(400, description='CSRF token missing')
+    if not hmac.compare_digest(cookie_token, form_token) or not _is_valid_csrf_token(
+        form_token
+    ):
+        abort(400, description='CSRF token invalid')
+
+
+@app.after_request
+def store_csrf_token(response):
+    if getattr(g, 'csrf_token_is_new', False):
+        response.set_cookie(
+            CSRF_COOKIE_NAME,
+            g.csrf_token,
+            httponly=True,
+            samesite='Lax',
+            secure=CSRF_COOKIE_SECURE,
+        )
+    return response
 
 @dataclass
 class User:
@@ -93,4 +180,4 @@ def deserialize_data():
     return render_template('result.html', message=message)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
+    app.run(host=LISTEN_HOST, port=8080)

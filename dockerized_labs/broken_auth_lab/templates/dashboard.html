@@ -50,6 +50,7 @@
 
         <div style="text-align: right; margin-top: 20px;">
             <form method="POST" action="/logout">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit">Logout</button>
             </form>
         </div>
