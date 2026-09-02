@@ -28,6 +28,17 @@ COPY . /app/
 EXPOSE 8000
 
 
-RUN python3 /app/manage.py migrate
+# Run the app as an unprivileged user instead of root.
+# UID/GID 1000 matches the usual host user so the bind-mounted project
+# directory (see docker-compose.yml) stays writable for the migration
+# service, the sqlite database at /app/db.sqlite3 and /app/staticfiles.
+RUN groupadd --gid 1000 appuser \
+    && useradd --uid 1000 --gid 1000 --create-home --shell /bin/sh appuser \
+    && python3 /app/manage.py migrate \
+    && chown -R appuser:appuser /app
+
 WORKDIR /app
+
+USER appuser
+
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers","6", "pygoat.wsgi"]
