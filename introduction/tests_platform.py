@@ -617,7 +617,7 @@ class PlatformRegressionTests(TestCase):
         self.assertEqual(utility_path.read_text(), before)
 
     def _ssti_blogs_dir(self):
-        """The lab writes blog templates here; keep the tree clean afterwards."""
+        """The lab writes stored blog bodies here; keep the tree clean afterwards."""
         blogs_dir = APP_DIR / "templates" / "Lab_2021" / "A3_Injection" / "Blogs"
         existing = {path.name for path in blogs_dir.iterdir()}
 
@@ -630,7 +630,7 @@ class PlatformRegressionTests(TestCase):
         return blogs_dir
 
     def test_ssti_lab_rejects_unvalidated_blog_body(self):
-        """CWE-915 regression: no row and no template file for bad input."""
+        """CWE-915 regression: no row and no stored file for bad input."""
         self.client.force_login(self.user)
         blogs_dir = self._ssti_blogs_dir()
         before = sorted(path.name for path in blogs_dir.iterdir())
@@ -654,9 +654,36 @@ class PlatformRegressionTests(TestCase):
         r = self.client.post(reverse("SSTI Lab"), {"blog": "my safe blog body"})
         self.assertEqual(r.status_code, 302)
         blog = Blogs.objects.get(author=self.user)
-        path = blogs_dir / f"{blog.blog_id}.html"
+        path = blogs_dir / f"{blog.blog_id}.txt"
         self.assertIn("blog/" + blog.blog_id, r["Location"])
         self.assertIn("my safe blog body", path.read_text())
+        page = self.client.get(reverse("SSTI Blog", args=[blog.blog_id]))
+        self.assertContains(page, "my safe blog body")
+
+    def test_ssti_blog_view_escapes_submitted_markup(self):
+        """CWE-79 regression: a stored blog body is displayed, never trusted as markup."""
+        self.client.force_login(self.user)
+        self._ssti_blogs_dir()
+        payload = "<script>alert(1)</script>{% debug %}{{ 7|add:7 }}"
+        r = self.client.post(reverse("SSTI Lab"), {"blog": payload})
+        self.assertEqual(r.status_code, 302)
+        blog = Blogs.objects.get(author=self.user)
+        page = self.client.get(reverse("SSTI Blog", args=[blog.blog_id]))
+        self.assertEqual(page.status_code, 200)
+        body = page.content.decode()
+        # The script tag comes back escaped, so the browser shows it as text.
+        self.assertNotIn("<script>alert(1)</script>", body)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", body)
+        # Template syntax is displayed literally: the body is context, not source.
+        self.assertIn("{% debug %}", body)
+        self.assertIn("{{ 7|add:7 }}", body)
+
+    def test_ssti_blog_view_reports_an_unknown_blog(self):
+        """A blog id with no stored body is answered, not served from an odd path."""
+        self.client.force_login(self.user)
+        page = self.client.get(reverse("SSTI Blog", args=["no-such-blog"]))
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, "No blog found")
 
     def test_safe_contained_path_accepts_a_lab_blog(self):
         """The blog reader still resolves the paths its own form submits."""
