@@ -45,8 +45,12 @@ def ssrf_lab2(request):<br>
 &emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "URL not allowed. ..."})<br>
 &emsp;&emsp;try:<br>
 &emsp;&emsp;&emsp;# redirects are re-validated with safe_fetch_url, never followed blindly<br>
-&emsp;&emsp;&emsp;response = requests.get(target, timeout=10, allow_redirects=False)<br>
-&emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode(errors="replace")})<br>
+&emsp;&emsp;&emsp;# and the fetch is bounded in time and size, never unlimited<br>
+&emsp;&emsp;&emsp;response = requests.get(target, timeout=FETCH_TIMEOUT, allow_redirects=False, stream=True)<br>
+&emsp;&emsp;&emsp;body = read_bounded_response(response)&nbsp;&nbsp;# at most MAX_FETCH_RESPONSE_BYTES<br>
+&emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": body.decode(errors="replace")})<br>
+&emsp;&emsp;except ResponseTooLargeError:<br>
+&emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Response too large"})<br>
 &emsp;&emsp;except requests.RequestException:<br>
 &emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})<br>
    </code>
