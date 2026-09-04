@@ -15,7 +15,7 @@ from django.contrib.auth.models import User
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
-from .models import CF_user, CSRF_user_tbl
+from .models import CF_user, CSRF_user_tbl, authLogin
 from .utility import hash_password
 
 
@@ -236,6 +236,71 @@ class PlatformRegressionTests(TestCase):
         r = self.client.post(reverse("cryptographic_failure_lab"),
                              {"username": "seeded", "password": "p@ssword"})
         self.assertContains(r, "Successfully logged in as seeded")
+
+
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+)
+class AuthLabResponseRenderingTests(TestCase):
+    """The broken-auth lab responses go through the escaping template path.
+
+    The signup/login/logout views used to hand a pre-rendered string to
+    HttpResponse (CWE-79). They now use django.shortcuts.render, so the
+    stored name/username are escaped and base.html still receives a real
+    {{ csrf_token }}. The lab itself (guessing the `userid` cookie) must
+    keep working, so the cookie behaviour is asserted too.
+    """
+
+    SCRIPT_PAYLOAD = "<script>alert(1)</script>"
+    IMG_PAYLOAD = "<img src=x onerror=alert(1)>"
+
+    def test_signup_escapes_user_data_and_still_sets_the_cookie(self):
+        r = self.client.post("/auth_lab/signup",
+                             {"name": self.SCRIPT_PAYLOAD,
+                              "username": "authuser1",
+                              "pass": "pw"})
+        self.assertEqual(r.status_code, 200)
+        self.assertNotContains(r, self.SCRIPT_PAYLOAD)
+        self.assertContains(r, "&lt;script&gt;alert(1)&lt;/script&gt;")
+        obj = authLogin.objects.get(username="authuser1")
+        self.assertEqual(r.cookies["userid"].value, str(obj.userid))
+
+    def test_signup_response_carries_a_real_csrf_token(self):
+        r = self.client.post("/auth_lab/signup",
+                             {"name": "Jack", "username": "authuser2", "pass": "pw"})
+        self.assertContains(r, 'name="csrfmiddlewaretoken"')
+        self.assertNotContains(r, 'name="csrfmiddlewaretoken" value=""')
+
+    def test_login_with_the_userid_cookie_escapes_stored_markup(self):
+        """The cookie-swap exercise still works, and the name is not live markup."""
+        obj = authLogin.objects.create(name=self.IMG_PAYLOAD,
+                                       username="authuser3",
+                                       password="pw")
+        self.client.cookies["userid"] = str(obj.userid)
+        r = self.client.get("/auth_lab/login")
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "authuser3")
+        self.assertNotContains(r, self.IMG_PAYLOAD)
+        self.assertContains(r, "&lt;img src=x onerror=alert(1)&gt;")
+
+    def test_login_post_escapes_user_data_and_still_sets_the_cookie(self):
+        obj = authLogin.objects.create(name=self.SCRIPT_PAYLOAD,
+                                       username="authuser4",
+                                       password="pw")
+        r = self.client.post("/auth_lab/login",
+                             {"username": "authuser4", "pass": "pw"})
+        self.assertEqual(r.status_code, 200)
+        self.assertNotContains(r, self.SCRIPT_PAYLOAD)
+        self.assertContains(r, "&lt;script&gt;alert(1)&lt;/script&gt;")
+        self.assertEqual(r.cookies["userid"].value, str(obj.userid))
+
+    def test_logout_still_renders_and_clears_the_cookie(self):
+        self.client.cookies["userid"] = "1"
+        r = self.client.get("/auth_lab/logout")
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Logout successful")
+        self.assertEqual(r.cookies["userid"].value, "")
 
 
 @override_settings(
