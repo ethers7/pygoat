@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/3.0/ref/settings/
 """
 
+import hashlib
 import os
 
 import django_heroku
@@ -169,4 +170,13 @@ SOCIALACCOUNT_PROVIDERS = {
 }
 
 SECRET_COOKIE_KEY = "PYGOAT"
+
+# JWT signing/verification key for the CSRF lab auth cookie. Read from the
+# environment so that no key material is stored in source control (CWE-522).
+# When the variable is unset the key is derived from Django's SECRET_KEY: this
+# keeps every gunicorn worker on the same value (so the lab cookie still
+# verifies) without shipping a hard-coded default token in the repository.
+CSRF_LAB_JWT_KEY = os.environ.get('CSRF_LAB_JWT_KEY') or hashlib.sha256(
+    ('pygoat.csrf_lab.jwt.v1:' + SECRET_KEY).encode()
+).hexdigest()
 CSRF_TRUSTED_ORIGINS = ["http://127.0.0.1:8000","http://0.0.0.0:8000","http://172.16.189.10"]
