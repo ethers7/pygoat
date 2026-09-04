@@ -56,6 +56,7 @@
             <!-- The session cookie is HttpOnly, so JavaScript can no longer
                  clear it: log out through the server instead. -->
             <form method="POST" action="/logout" style="display: inline;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit">Logout</button>
             </form>
         </div>

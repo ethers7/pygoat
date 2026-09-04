@@ -57,6 +57,18 @@ pip install -r requirements.txt
 python main.py
 ```
 
+## CSRF protection
+
+CSRF is not part of this lab's lesson, so it is fixed rather than left open. Both forms
+(`/serialize` and `/deserialize`) send a `csrf_token` hidden field (an `X-CSRF-Token` header also
+works), and the server rejects any POST whose token does not match the one bound to the caller's
+browser with `400 CSRF token missing or invalid`. The token is an HMAC over a random per-browser id
+kept in the `csrf_id` cookie and is verified **server side** on every unsafe request. The HMAC key
+is generated per process, or can be pinned across restarts with `INSEC_DES_LAB_CSRF_KEY`. The
+`csrf_id` cookie is always `HttpOnly` and `SameSite=Lax`; since the lab is served over plain HTTP on
+`http://localhost:8080`, the `Secure` flag is off by default and can be switched on with
+`INSEC_DES_LAB_SECURE_COOKIES=1` when the lab is placed behind HTTPS.
+
 ## Lab Structure
 
 ```

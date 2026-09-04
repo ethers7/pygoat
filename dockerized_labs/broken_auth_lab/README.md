@@ -55,6 +55,19 @@ Accepted opt-out values are `1`, `true`, `yes` and `on` (case-insensitive). Anyt
 leaving the variable unset - keeps the secure behaviour. When the lab is served over HTTPS, leave the
 variable unset. `HttpOnly` and `SameSite=Lax` are always applied and are not configurable.
 
+### CSRF protection
+
+CSRF is **not** one of this lab's exercises, so it is fixed rather than left open. Every state
+changing request (`/login`, `/register`, `/reset-password`, `/logout`) must carry a `csrf_token`
+form field (or an `X-CSRF-Token` header); requests without a valid token are rejected with
+`400 CSRF token missing or invalid`. The token is an HMAC over a random per-browser id kept in the
+`csrf_id` cookie, and it is verified **server side** on every unsafe request - a hidden field on its
+own would be no protection at all. The HMAC key is generated per process, or can be pinned across
+restarts with `BROKEN_AUTH_LAB_CSRF_KEY`; it is intentionally independent of the weak, hardcoded
+Flask `secret_key` that is still part of the lab. The `csrf_id` cookie follows the same
+`Secure`/`HttpOnly`/`SameSite=Lax` rules as the session cookie, so plain-HTTP runs need the opt-out
+above for the forms to work.
+
 ### Default Credentials
 
 The lab comes with two pre-configured users:

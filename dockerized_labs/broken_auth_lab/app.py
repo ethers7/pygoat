@@ -1,8 +1,10 @@
-from flask import Flask, render_template, request, redirect, url_for, make_response, flash
+from flask import Flask, render_template, request, redirect, url_for, make_response, flash, abort, g
+import hmac
 import json
 import os
 import secrets
 from datetime import datetime, timedelta
+from hashlib import sha256
 import base64
 
 app = Flask(__name__)
@@ -27,6 +29,74 @@ def secure_cookies_enabled():
     """
     opt_out = os.environ.get(INSECURE_COOKIES_ENV, '')
     return opt_out.strip().lower() not in ('1', 'true', 'yes', 'on')
+
+
+# --------------------------------------------------------------------------
+# CSRF protection
+#
+# Every state changing request (POST/PUT/PATCH/DELETE) has to carry a token
+# that matches the one bound to the caller's own browser, so another site can
+# no longer make a logged in browser submit these forms (login, register,
+# password reset, logout).
+#
+# The token is an HMAC over a random per-browser id stored in the "csrf_id"
+# cookie. The HMAC key is process local (or supplied through the environment)
+# and is deliberately NOT app.secret_key: this lab intentionally ships a weak,
+# publicly known Flask secret key as one of its exercises, and the CSRF token
+# has to stay unguessable regardless of that.
+# --------------------------------------------------------------------------
+CSRF_COOKIE_NAME = 'csrf_id'
+CSRF_FIELD_NAME = 'csrf_token'
+CSRF_HEADER_NAME = 'X-CSRF-Token'
+CSRF_SAFE_METHODS = frozenset(('GET', 'HEAD', 'OPTIONS', 'TRACE'))
+CSRF_KEY_ENV = 'BROKEN_AUTH_LAB_CSRF_KEY'
+CSRF_KEY = (os.environ.get(CSRF_KEY_ENV) or secrets.token_urlsafe(32)).encode('utf-8')
+
+
+def csrf_token_for(csrf_id):
+    """Return the CSRF token bound to a single browser's csrf_id."""
+    return hmac.new(CSRF_KEY, csrf_id.encode('utf-8'), sha256).hexdigest()
+
+
+def current_csrf_token():
+    """Return the CSRF token for the request being handled ('' if unknown)."""
+    csrf_id = getattr(g, 'csrf_id', '')
+    return csrf_token_for(csrf_id) if csrf_id else ''
+
+
+@app.before_request
+def csrf_protect():
+    """Fail closed on any state changing request without a valid token."""
+    cookie_id = request.cookies.get(CSRF_COOKIE_NAME, '')
+    if request.method not in CSRF_SAFE_METHODS:
+        submitted = request.form.get(CSRF_FIELD_NAME, '') or request.headers.get(CSRF_HEADER_NAME, '')
+        expected = csrf_token_for(cookie_id) if cookie_id else ''
+        if not expected or not submitted or not hmac.compare_digest(submitted, expected):
+            abort(400, 'CSRF token missing or invalid')
+    if not cookie_id:
+        cookie_id = secrets.token_urlsafe(32)
+        g.csrf_cookie_pending = True
+    g.csrf_id = cookie_id
+
+
+@app.after_request
+def send_csrf_cookie(response):
+    """Hand a browser its csrf_id the first time we see it."""
+    if getattr(g, 'csrf_cookie_pending', False):
+        response.set_cookie(
+            CSRF_COOKIE_NAME,
+            g.csrf_id,
+            secure=secure_cookies_enabled(),
+            httponly=True,
+            samesite='Lax',
+        )
+    return response
+
+
+@app.context_processor
+def inject_csrf_token():
+    """Expose {{ csrf_token() }} to templates (same shape as Flask-WTF)."""
+    return {'csrf_token': current_csrf_token}
 
 
 # Vulnerable: Storing user data in memory

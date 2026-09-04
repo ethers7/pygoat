@@ -1,9 +1,88 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, abort, g
 import base64
+import hmac
 import json
+import os
+import secrets
 from dataclasses import dataclass, asdict
+from hashlib import sha256
 
 app = Flask(__name__)
+
+# --------------------------------------------------------------------------
+# CSRF protection
+#
+# The two lab forms below change server side state, so every POST has to carry
+# a token bound to the caller's own browser: another site can no longer make a
+# visitor's browser submit them.
+#
+# The token is an HMAC over a random per-browser id stored in the "csrf_id"
+# cookie, keyed with a process local secret (or one supplied through the
+# environment), and it is verified server side on every unsafe request.
+# --------------------------------------------------------------------------
+CSRF_COOKIE_NAME = 'csrf_id'
+CSRF_FIELD_NAME = 'csrf_token'
+CSRF_HEADER_NAME = 'X-CSRF-Token'
+CSRF_SAFE_METHODS = frozenset(('GET', 'HEAD', 'OPTIONS', 'TRACE'))
+CSRF_KEY_ENV = 'INSEC_DES_LAB_CSRF_KEY'
+CSRF_KEY = (os.environ.get(CSRF_KEY_ENV) or secrets.token_urlsafe(32)).encode('utf-8')
+
+# This lab is served over plain HTTP (http://localhost:8080), so the Secure
+# flag follows the actual transport: it is switched on when the lab is put
+# behind HTTPS by setting INSEC_DES_LAB_SECURE_COOKIES. HttpOnly and
+# SameSite=Lax are always applied - see README.md.
+SECURE_COOKIES_ENV = 'INSEC_DES_LAB_SECURE_COOKIES'
+
+
+def secure_cookies_enabled():
+    """Return True when the lab is served over HTTPS (opt in)."""
+    return os.environ.get(SECURE_COOKIES_ENV, '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def csrf_token_for(csrf_id):
+    """Return the CSRF token bound to a single browser's csrf_id."""
+    return hmac.new(CSRF_KEY, csrf_id.encode('utf-8'), sha256).hexdigest()
+
+
+def current_csrf_token():
+    """Return the CSRF token for the request being handled ('' if unknown)."""
+    csrf_id = getattr(g, 'csrf_id', '')
+    return csrf_token_for(csrf_id) if csrf_id else ''
+
+
+@app.before_request
+def csrf_protect():
+    """Fail closed on any state changing request without a valid token."""
+    cookie_id = request.cookies.get(CSRF_COOKIE_NAME, '')
+    if request.method not in CSRF_SAFE_METHODS:
+        submitted = request.form.get(CSRF_FIELD_NAME, '') or request.headers.get(CSRF_HEADER_NAME, '')
+        expected = csrf_token_for(cookie_id) if cookie_id else ''
+        if not expected or not submitted or not hmac.compare_digest(submitted, expected):
+            abort(400, 'CSRF token missing or invalid')
+    if not cookie_id:
+        cookie_id = secrets.token_urlsafe(32)
+        g.csrf_cookie_pending = True
+    g.csrf_id = cookie_id
+
+
+@app.after_request
+def send_csrf_cookie(response):
+    """Hand a browser its csrf_id the first time we see it."""
+    if getattr(g, 'csrf_cookie_pending', False):
+        response.set_cookie(
+            CSRF_COOKIE_NAME,
+            g.csrf_id,
+            secure=secure_cookies_enabled(),
+            httponly=True,
+            samesite='Lax',
+        )
+    return response
+
+
+@app.context_processor
+def inject_csrf_token():
+    """Expose {{ csrf_token() }} to templates (same shape as Flask-WTF)."""
+    return {'csrf_token': current_csrf_token}
 
 
 @dataclass
