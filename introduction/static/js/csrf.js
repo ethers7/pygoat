@@ -15,11 +15,16 @@ function getCsrfToken() {
         return field.value;
     }
     var cookies = document.cookie ? document.cookie.split(';') : [];
-    for (var i = 0; i < cookies.length; i++) {
-        var cookie = cookies[i].trim();
-        if (cookie.indexOf('csrftoken=') === 0) {
-            return decodeURIComponent(cookie.substring('csrftoken='.length));
+    var token = '';
+    var found = false;
+    // Iterate the values instead of indexing by a variable, and keep the first
+    // csrftoken cookie (exactly what the indexed loop returned).
+    cookies.forEach(function (entry) {
+        var cookie = entry.trim();
+        if (!found && cookie.indexOf('csrftoken=') === 0) {
+            found = true;
+            token = decodeURIComponent(cookie.substring('csrftoken='.length));
         }
-    }
-    return '';
+    });
+    return token;
 }
