@@ -49,7 +49,12 @@ event3 = function(){
         document.getElementById("a9_d3").style.display = 'flex';
         for (var i = 0; i < data.logs.length; i++) {
             var li = document.createElement("li");
-            li.innerHTML = data.logs[i];
+            // Log lines are plain text produced by the submitted logging code
+            // (test.log), so insert them as text. Assigning them to innerHTML
+            // parsed them as markup, which turned any payload that reached the
+            // log file into DOM XSS in this page. The A9 lesson is about the
+            // logging itself, so no markup is expected here.
+            li.textContent = data.logs[i];
             document.getElementById("a9_d3").appendChild(li);
         }
     })
