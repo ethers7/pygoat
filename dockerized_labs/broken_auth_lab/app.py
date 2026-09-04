@@ -31,6 +31,27 @@ def secure_cookies_enabled():
     return opt_out.strip().lower() not in ('1', 'true', 'yes', 'on')
 
 
+# Environment flag that lets an operator turn Flask's debug mode back on for a
+# local troubleshooting session. Debug mode is off unless this is set.
+DEBUG_ENV = 'BROKEN_AUTH_LAB_DEBUG'
+
+
+def debug_enabled():
+    """Return True only when the operator explicitly opts in to debug mode.
+
+    Flask's debug mode serves the Werkzeug interactive debugger, which turns any
+    unhandled exception into an in-browser Python console (remote code
+    execution) and leaks source plus local variables in tracebacks. It is
+    therefore off by default: an unset, empty or unrecognised value means OFF,
+    and only 1/true/yes/on (case-insensitive) enable it - see README.md.
+
+    An explicit bool is returned so the result always wins over Flask's own
+    FLASK_DEBUG/FLASK_ENV defaults rather than falling back to them.
+    """
+    opt_in = os.environ.get(DEBUG_ENV, '')
+    return opt_in.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
 # --------------------------------------------------------------------------
 # CSRF protection
 #
@@ -237,4 +258,8 @@ def logout():
     return response
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)  # Vulnerable: Debug mode enabled in production 
+    # Fixed: debug mode is no longer hardcoded on. It defaults to OFF, so the
+    # Werkzeug interactive debugger (an unauthenticated RCE console on any
+    # unhandled exception) is not exposed; an operator has to opt in explicitly
+    # with BROKEN_AUTH_LAB_DEBUG - see README.md.
+    app.run(host='0.0.0.0', port=5000, debug=debug_enabled()) 

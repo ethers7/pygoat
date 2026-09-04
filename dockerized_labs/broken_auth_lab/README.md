@@ -14,7 +14,8 @@ This is a deliberately vulnerable web application that demonstrates common authe
    cryptographically secure random generator instead of an MD5 digest of email + timestamp;
    the remaining reset weaknesses - no expiry, token shown in the UI - are still exercises)
 6. No Brute Force Protection
-7. Debug Mode Enabled in Production
+7. Debug Mode Enabled in Production (fixed: debug mode is no longer hardcoded on - it is off by
+   default and only an explicit `BROKEN_AUTH_LAB_DEBUG` opt-in turns it on, see below)
 
 ## Setup Instructions
 
@@ -54,6 +55,39 @@ or add it to the `environment:` block in `docker-compose.yml`:
 Accepted opt-out values are `1`, `true`, `yes` and `on` (case-insensitive). Anything else - including
 leaving the variable unset - keeps the secure behaviour. When the lab is served over HTTPS, leave the
 variable unset. `HttpOnly` and `SameSite=Lax` are always applied and are not configurable.
+
+### Debug mode (off by default, explicit opt-in)
+
+Flask's debug mode used to be hardcoded on (`debug=True`). That served the Werkzeug interactive
+debugger, so **anyone** who could reach the app and trigger an unhandled exception got a Python
+console in the browser (remote code execution) plus the source and local variables of every frame -
+the debugger PIN is derivable in many container setups, so it is not a real control. Debug mode is
+now **off by default** and has to be requested explicitly:
+
+```bash
+# only for local troubleshooting of this lab - never on an exposed host
+BROKEN_AUTH_LAB_DEBUG=1 docker-compose up --build
+```
+
+or add it to the `environment:` block in `docker-compose.yml`:
+
+```yaml
+    environment:
+      - BROKEN_AUTH_LAB_DEBUG=1
+```
+
+Accepted opt-in values are `1`, `true`, `yes` and `on` (case-insensitive). Anything else - including
+leaving the variable unset, an empty value or an unrecognised value such as `maybe` - keeps debug
+mode **off**. The flag is passed to `app.run()` as an explicit boolean, so it also overrides the
+`FLASK_ENV=development` / `FLASK_DEBUG` defaults that the `Dockerfile` and `docker-compose.yml` set.
+
+With debug mode off, errors render as a plain `500` page instead of a traceback and the auto-reloader
+is not started. Nothing in the lab exercises depends on the debugger: the exploitable behaviour
+(weak passwords, forgeable session token, reset token disclosure, role escalation) is all visible
+through normal responses. If you want to read a traceback while working through an exercise, turn the
+flag on deliberately for that run and turn it back off afterwards - and note that with the reloader
+running there are two processes, so the per-process CSRF HMAC key differs between them unless you
+pin `BROKEN_AUTH_LAB_CSRF_KEY` (see below).
 
 ### CSRF protection
 
