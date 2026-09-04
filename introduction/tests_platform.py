@@ -18,6 +18,7 @@ from django.contrib.auth.models import User
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
+from . import views
 from .models import Blogs, CF_user, CSRF_user_tbl, authLogin
 from .utility import hash_password
 
@@ -413,6 +414,49 @@ class LabCodeGroundTests(TestCase):
         self.assertIn("invalid code", r.json()["message"])
         probe.assert_not_called()
         self.assertEqual(os.listdir(os.path.join(self.root, "A9")), [])
+
+
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+)
+class OutboundFetchBudgetTests(TestCase):
+    """The SSRF lab fetch must be bounded in time and in size (CWE-400).
+
+    requests waits for ever and buffers the whole body by default, so a host
+    that accepts the connection and then stalls (or never stops sending) used
+    to hold a worker for good. The lab must still show the fetched page.
+    """
+
+    PASSWORD = "Str0ng-Passw0rd!"
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="fetchuser",
+            email="fetchuser@example.com",
+            password=self.PASSWORD,
+        )
+        self.client.force_login(self.user)
+
+    def test_fetch_passes_a_timeout_and_reads_a_bounded_body(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.iter_content.return_value = iter([b"hello from the internet"])
+        # example.com is allowlisted; DNS is mocked so the test never resolves.
+        with mock.patch("introduction.utility._is_public_host", return_value=True), \
+                mock.patch("introduction.views.requests.get", return_value=response) as get:
+            r = self.client.post("/ssrf_lab2", {"url": "https://example.com/page"})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "hello from the internet")
+        # An explicit (connect, read) budget, not the "wait for ever" default.
+        connect, read = get.call_args[1]["timeout"]
+        self.assertTrue(0 < connect <= 30, connect)
+        self.assertTrue(0 < read <= 30, read)
+        self.assertTrue(get.call_args[1]["stream"])
+        self.assertFalse(get.call_args[1]["allow_redirects"])
+        # Only one bounded chunk is buffered, never the whole stream.
+        response.iter_content.assert_called_once_with(views.FETCH_MAX_BYTES)
+        self.assertLessEqual(views.FETCH_MAX_BYTES, 4 * 1024 * 1024)
 
 
 @override_settings(

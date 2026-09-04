@@ -40,8 +40,9 @@ def ssrf_lab2(request):<br>
 &emsp;&emsp;if safe_url is None:<br>
 &emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "URL not allowed."})<br>
 &emsp;&emsp;try:<br>
-&emsp;&emsp;&emsp;response = requests.get(safe_url, allow_redirects=False, timeout=5)<br>
-&emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode(errors="replace")})<br>
+&emsp;&emsp;&emsp;with requests.get(safe_url, allow_redirects=False, timeout=FETCH_TIMEOUT, stream=True) as response:<br>
+&emsp;&emsp;&emsp;&emsp;body = next(response.iter_content(FETCH_MAX_BYTES), b"")<br>
+&emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": body.decode(errors="replace")})<br>
 &emsp;&emsp;except requests.RequestException:<br>
 &emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})<br>
    </code>

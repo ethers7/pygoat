@@ -1004,6 +1004,15 @@ def ssrf_target(request):
     else:
         return render(request,"Lab/ssrf/ssrf_target.html",{"access_denied":True})
 
+# Budget for the one outbound fetch this app makes on behalf of a request:
+# (connect, read) seconds, and the most of a remote body we ever buffer.
+# requests waits for ever and reads without a bound by default, so a host that
+# accepts the connection and then stalls - or streams an endless body - would
+# hold this gunicorn worker and its memory until the process dies (CWE-400).
+FETCH_TIMEOUT = (3, 5)
+FETCH_MAX_BYTES = 512 * 1024
+
+
 @authentication_decorator
 def ssrf_lab2(request):
     if request.method == "GET":
@@ -1018,9 +1027,14 @@ def ssrf_lab2(request):
                           {"error": "URL not allowed. Only http(s) URLs on the allowlisted public hosts are fetched."})
         try:
             # allow_redirects=False: a redirect would otherwise send us to an
-            # unvalidated destination after the allowlist check has passed.
-            response = requests.get(safe_url, allow_redirects=False, timeout=5)
-            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode(errors="replace")})
+            # unvalidated destination after the allowlist check has passed, and
+            # it also keeps a redirect chain from multiplying the fetch budget.
+            # stream=True + one bounded chunk: the reply is truncated instead of
+            # buffered whole, and the connection is released either way.
+            with requests.get(safe_url, allow_redirects=False,
+                              timeout=FETCH_TIMEOUT, stream=True) as response:
+                body = next(response.iter_content(FETCH_MAX_BYTES), b"")
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": body.decode(errors="replace")})
         except requests.RequestException:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
