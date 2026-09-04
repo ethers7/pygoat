@@ -239,3 +239,26 @@ class XxeParseTests(TestCase):
         response = self._post("<?xml version='1.0'?><comm></comm>")
         self.assertEqual(response.status_code, 400)
         self.assertEqual(comments.objects.get(id=1).comment, "untouched")
+
+    def test_entity_payload_declaring_an_encoding_is_rejected_without_a_server_error(self):
+        # Parsing a decoded str would raise ValueError on the encoding declaration
+        # before the entity checks ran, leaking a traceback; this must be a 400.
+        response = self._post('<?xml version="1.0" encoding="UTF-8"?>'
+                              '<!DOCTYPE comm [<!ELEMENT comm (#PCDATA)>'
+                              '<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
+                              '<comm><text>&xxe;</text></comm>')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(comments.objects.get(id=1).comment, "untouched")
+
+    def test_benign_document_declaring_an_encoding_is_still_parsed(self):
+        response = self._post('<?xml version="1.0" encoding="UTF-8"?>'
+                              '<comm><text>hello world</text></comm>')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(comments.objects.get(id=1).comment, "hello world")
+
+    def test_oversized_comment_is_bounded_to_the_column_width(self):
+        max_length = comments._meta.get_field("comment").max_length
+        payload = "A" * (max_length + 50)
+        response = self._post("<?xml version='1.0'?><comm><text>%s</text></comm>" % payload)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(comments.objects.get(id=1).comment, "A" * max_length)

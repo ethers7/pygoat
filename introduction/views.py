@@ -262,18 +262,24 @@ def xxe_parse(request):
 
     # Parse with defusedxml: DTDs, entity declarations and external entity
     # references are rejected, so the document cannot pull in local files or
-    # reach internal services (XXE).
+    # reach internal services (XXE). The undecoded body is handed to the parser
+    # so a document carrying its own encoding declaration is still refused by
+    # the parser (fail closed, 400) instead of raising an unhandled ValueError
+    # that would return a 500 with a traceback.
     try:
         root = defused_etree.fromstring(
-            request.body.decode('utf-8'),
+            request.body,
             forbid_dtd=True, forbid_entities=True, forbid_external=True)
-    except (defused_etree.ParseError, DefusedXmlException, UnicodeDecodeError):
+    except (defused_etree.ParseError, DefusedXmlException, ValueError):
         return HttpResponseBadRequest('Invalid XML: DTDs and external entities are not allowed')
 
     node = root if root.tag == 'text' else root.find('.//text')
     if node is None:
         return HttpResponseBadRequest('Missing <text> element')
-    text = (node.text or '').strip()
+    # Bound the parsed text to the width of the column it is written to, so an
+    # oversized document cannot trigger a database error or a truncated write.
+    max_length = comments._meta.get_field('comment').max_length
+    text = (node.text or '').strip()[:max_length]
     comments.objects.filter(id=1).update(comment=text)
 
     return render(request, 'Lab/XXE/xxe_lab.html')
