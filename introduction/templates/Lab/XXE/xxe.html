@@ -71,6 +71,17 @@
                     your payload if the vulnerability exists.</li>
             </ul>
             </p>
+            <p class="bp">
+                <b>This lab is now patched - observe the mitigation</b><br>
+                The parser behind this lab was hardened with <code>defusedxml</code>, so DTDs, entity declarations and
+                external entity references are refused before any expansion happens. Sending the payload above no
+                longer leaks a file: the server answers
+                <code>400 Invalid XML: DTDs and external entities are not allowed</code> and the stored comment is left
+                untouched. A plain document such as
+                <code>&lt;?xml version='1.0'?>&lt;comm>&lt;text>hello&lt;/text>&lt;/comm></code> is still parsed and
+                shown, which is exactly the behaviour a safe parser should keep. Compare both requests in BurpSuite to
+                see how the fix changes the response.
+            </p>
 
 
             </p>

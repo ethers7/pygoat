@@ -13,14 +13,13 @@ from dataclasses import asdict, dataclass
 from hashlib import md5
 from io import BytesIO
 from random import randint
-from xml.dom.pulldom import START_ELEMENT, parseString
-from xml.sax import make_parser
-from xml.sax.handler import feature_external_ges
 
+import defusedxml.ElementTree as defused_etree
 import jwt
 import requests
 import yaml
 from argon2 import PasswordHasher
+from defusedxml.common import DefusedXmlException
 from django.contrib import messages
 from django.contrib.auth import authenticate, login
 from django.contrib.auth.forms import UserCreationForm
@@ -266,17 +265,21 @@ def xxe_see(request):
 @csrf_exempt
 def xxe_parse(request):
 
-    parser = make_parser()
-    parser.setFeature(feature_external_ges, True)
-    doc = parseString(request.body.decode('utf-8'), parser=parser)
-    for event, node in doc:
-        if event == START_ELEMENT and node.tagName == 'text':
-            doc.expandNode(node)
-            text = node.toxml()
-    startInd = text.find('>')
-    endInd = text.find('<', startInd)
-    text = text[startInd + 1:endInd:]
-    p=comments.objects.filter(id=1).update(comment=text)
+    # Parse with defusedxml: DTDs, entity declarations and external entity
+    # references are rejected, so the document cannot pull in local files or
+    # reach internal services (XXE).
+    try:
+        root = defused_etree.fromstring(
+            request.body.decode('utf-8'),
+            forbid_dtd=True, forbid_entities=True, forbid_external=True)
+    except (defused_etree.ParseError, DefusedXmlException, UnicodeDecodeError):
+        return HttpResponseBadRequest('Invalid XML: DTDs and external entities are not allowed')
+
+    node = root if root.tag == 'text' else root.find('.//text')
+    if node is None:
+        return HttpResponseBadRequest('Missing <text> element')
+    text = (node.text or '').strip()
+    comments.objects.filter(id=1).update(comment=text)
 
     return render(request, 'Lab/XXE/xxe_lab.html')
 

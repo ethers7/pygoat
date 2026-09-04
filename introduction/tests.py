@@ -1,8 +1,10 @@
 import os
 from unittest import mock
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
+from django.urls import reverse
 
+from .models import comments
 from .utility import validate_fetch_url
 
 
@@ -41,3 +43,33 @@ class ValidateFetchUrlTests(SimpleTestCase):
 
     def test_credential_trick_pointing_at_metadata_is_rejected(self):
         self.assertIsNone(validate_fetch_url("http://example.com@169.254.169.254/"))
+
+
+class XxeParseTests(TestCase):
+    """The XXE lab must still parse benign XML but refuse DTDs/external entities."""
+
+    XXE_PAYLOAD = ("<?xml version='1.0'?>"
+                   "<!DOCTYPE comm [<!ELEMENT comm (#PCDATA)>"
+                   "<!ENTITY xxe SYSTEM 'file:///etc/passwd'>]>"
+                   "<comm><text>&xxe;</text></comm>")
+
+    def setUp(self):
+        self.comment = comments.objects.create(id=1, name="System", comment="untouched")
+
+    def _post(self, body):
+        return self.client.post(reverse("xxe_parse"), data=body, content_type="text/xml")
+
+    def test_benign_comment_is_parsed_and_stored(self):
+        response = self._post("<?xml version='1.0'?><comm><text>hello world</text></comm>")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(comments.objects.get(id=1).comment, "hello world")
+
+    def test_external_entity_payload_is_rejected(self):
+        response = self._post(self.XXE_PAYLOAD)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(comments.objects.get(id=1).comment, "untouched")
+
+    def test_document_without_text_element_is_rejected(self):
+        response = self._post("<?xml version='1.0'?><comm></comm>")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(comments.objects.get(id=1).comment, "untouched")
