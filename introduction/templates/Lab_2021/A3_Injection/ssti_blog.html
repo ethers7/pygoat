@@ -1,0 +1,21 @@
+{% extends 'introduction/base.html' %}
+{% block content %}
+{% block title %}
+<title>SSTI-Blogs</title>
+{% endblock %}
+
+{% comment %}
+The blog body arrives as context and is printed with {{ }}, so Django's
+autoescaping renders it as text. It is never compiled as template source, which
+is what made this lab server-side template injection.
+{% endcomment %}
+
+<div class="container">
+    <h3 style="color: #626262;">{{ blog.blog_id }}</h3>
+    <div class="blog-body" style="color: #626262;">{{ blog.content|linebreaks }}</div>
+</div>
+
+<div style="position : fixed ; right : 7px; bottom : 7px"><button class="btn btn-info" type="button"
+        onclick="window.location.href='/ssti/lab'">Back to Lab</button></div>
+
+{% endblock %}

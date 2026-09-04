@@ -18,6 +18,9 @@ event5 = function(){
         let data = JSON.parse(result);
         if (data.message == "success"){
             alert("code saved");
+        } else {
+            // Code that is missing, too large or not valid Python is refused.
+            alert(data.message);
         }  // parse JSON string into object
     })
     .catch(error => console.log('error', error));

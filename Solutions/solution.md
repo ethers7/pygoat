@@ -522,9 +522,27 @@ This results as being logged in as Admin
 {% endfor %}`
 
 add a post which includes this content
- 
-The result would look like this -->
+
+The result used to look like this -->
 ![Screenshot from 2022-06-10 21-04-29](https://user-images.githubusercontent.com/75058161/173106213-9e218e81-d4b2-4447-9570-4aa8de3dea88.png)
+
+**The view has since been fixed, so this payload no longer executes.** Post it
+anyway and compare: the tags come back on screen as text.
+
+- Vulnerable version: the post was concatenated into Django template *source*
+  and written to `introduction/templates/Lab_2021/A3_Injection/Blogs/<id>.html`,
+  and the blog page rendered that file by name. Rendering *compiles* a template,
+  so `{% ... %}` / `{{ ... }}` in the post ran on the server with the
+  application's privileges - here it walked the admin log and printed other
+  users' password hashes.
+- Fixed version: the post is stored as data (`Blogs.content`) and the blog page
+  renders one fixed template, `ssti_blog.html`, with that text as **context**.
+  Template context is escaped, never compiled, so the payload is displayed
+  instead of executed - and the request can no longer choose which template file
+  is rendered or create one.
+
+Takeaway: never build template source out of request data. Pass untrusted values
+in the context, and keep the template names server-side.
 
 ### 2021-A8: Software and Data Integrity failure
 This data is a demonstration that how an XSS attack can deceive users to download any malicious file. The lab consists of a page to download a file, and a direct link to that page is also given (from a hacker). Let's download both files and compare the hash before opening that.

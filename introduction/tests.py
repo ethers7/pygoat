@@ -1,14 +1,18 @@
 import hashlib
 import os
+import shutil
+import tempfile
 from unittest import mock
 
 from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
 from .models import comments
-from .utility import (UnsafeExpression, customHash, ensure_password_hash,
-                      hash_password, is_password_hash, safe_arithmetic_eval,
-                      validate_fetch_url, verify_password)
+from .utility import (LAB_CODE_MAX_BYTES, LabCodeRejected, UnsafeExpression,
+                      customHash, ensure_password_hash, hash_password,
+                      is_password_hash, lab_code_path, safe_arithmetic_eval,
+                      validate_fetch_url, validate_lab_code, verify_password,
+                      write_lab_code)
 
 
 class SafeArithmeticEvalTests(SimpleTestCase):
@@ -131,6 +135,58 @@ class LabPasswordHashingTests(SimpleTestCase):
         self.assertEqual(ensure_password_hash(hashed), hashed)   # never double hashed
         self.assertEqual(ensure_password_hash(""), "")
         self.assertIsNone(ensure_password_hash(None))
+
+
+class LabCodeWriteTests(SimpleTestCase):
+    """Submitted coding-ground code is bounded, parseable and written safely.
+
+    These helpers do not sandbox the submitted code (running it is the
+    exercise); they make sure the *write* cannot be steered by the request and
+    cannot leave a broken shared module behind.
+    """
+
+    VALID = "def check_vuln(mods):\n    return []\n"
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root, True)
+        for package in ("A6", "A9"):
+            os.mkdir(os.path.join(self.root, package))
+        patcher = mock.patch("introduction.utility._LAB_CODE_ROOT", self.root)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_only_allowlisted_targets_resolve(self):
+        self.assertEqual(lab_code_path("A6_utility"),
+                         os.path.join(self.root, "A6", "utility.py"))
+        for target in ("../../settings.py", "playground/A6/utility.py", "", None, 1):
+            with self.assertRaises(LabCodeRejected, msg=repr(target)):
+                lab_code_path(target)
+
+    def test_rejects_missing_oversized_and_unparseable_code(self):
+        for code in (None, "", "   ", 42):
+            with self.assertRaises(LabCodeRejected, msg=repr(code)):
+                validate_lab_code(code)
+        with self.assertRaises(LabCodeRejected):
+            validate_lab_code("x = 1\n" + "# pad\n" * LAB_CODE_MAX_BYTES)
+        for code in ("def broken(:\n", "class A\n", "x = \x00"):
+            with self.assertRaises(LabCodeRejected, msg=repr(code)):
+                validate_lab_code(code)
+
+    def test_accepts_a_normal_submission_and_installs_it_atomically(self):
+        path = write_lab_code("A6_utility", self.VALID)
+        self.assertEqual(path, os.path.join(self.root, "A6", "utility.py"))
+        with open(path, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), self.VALID)
+        # No temporary leftovers next to the module a running app imports.
+        self.assertEqual(os.listdir(os.path.join(self.root, "A6")), ["utility.py"])
+
+    def test_a_rejected_submission_leaves_the_previous_module_untouched(self):
+        path = write_lab_code("A9_log", self.VALID)
+        with self.assertRaises(LabCodeRejected):
+            write_lab_code("A9_log", "def broken(:\n")
+        with open(path, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), self.VALID)
 
 
 class XxeParseTests(TestCase):

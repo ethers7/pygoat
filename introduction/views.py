@@ -32,9 +32,8 @@ from requests.structures import CaseInsensitiveDict
 from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
-from .utility import (UnsafeExpression, customHash, filter_blog,
-                      safe_arithmetic_eval, validate_fetch_url, validate_host,
-                      verify_password)
+from .utility import (UnsafeExpression, customHash, safe_arithmetic_eval,
+                      validate_fetch_url, validate_host, verify_password)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -1035,20 +1034,15 @@ def ssti_lab(request):
             blog = request.POST["blog"]
             id = str(uuid.uuid4()).split('-')[-1]
 
-            blog = filter_blog(blog)
-            prepend_code = "{% extends 'introduction/base.html' %}\
-                {% block content %}{% block title %}\
-                <title>SSTI-Blogs</title>\
-                {% endblock %}"
-            
-            blog = prepend_code + blog + "{% endblock %}"
-            new_blog = Blogs.objects.create(author = request.user, blog_id = id)
-            new_blog.save() 
-            dirname = os.path.dirname(__file__)
-            filename = os.path.join(dirname, f"templates/Lab_2021/A3_Injection/Blogs/{id}.html")
-            file = open(filename, "w+") 
-            file.write(blog)
-            file.close()
+            # The post is stored as data, never as template source. Building a
+            # template out of the request body and writing it into the template
+            # directory made every blog post server-side template injection:
+            # the next render compiled the payload, so {% %} tags ran inside
+            # the app (file reads, RCE) with its privileges. ssti_view_blog now
+            # renders one fixed template and passes this text as context, so the
+            # engine escapes it instead of executing it.
+            new_blog = Blogs.objects.create(author=request.user, blog_id=id, content=blog)
+            new_blog.save()
             return redirect(f'blog/{id}')
     else:
         return redirect('login')
@@ -1057,7 +1051,12 @@ def ssti_lab(request):
 def ssti_view_blog(request,blog_id):
     if request.user.is_authenticated:
         if request.method=="GET":
-            return render(request,f"Lab_2021/A3_Injection/Blogs/{blog_id}.html")
+            # Fixed template name: blog_id is looked up as data and can no
+            # longer select which template file is rendered.
+            blog = Blogs.objects.filter(blog_id=blog_id).first()
+            if blog is None:
+                return HttpResponseBadRequest()
+            return render(request, "Lab_2021/A3_Injection/ssti_blog.html", {"blog": blog})
         elif request.method=="POST":
             return HttpResponseBadRequest()
 

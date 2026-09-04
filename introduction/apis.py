@@ -10,6 +10,7 @@ from introduction.playground.A9.main import Log
 from introduction.playground.ssrf import main
 
 from .utility import *
+from .utility import LabCodeRejected, validate_lab_code, write_lab_code
 from .views import authentication_decorator
 
 
@@ -54,21 +55,30 @@ def ssrf_code_checker(request):
 # Insufficient Logging & Monitoring
 
 
-# @authentication_decorator
+# This coding ground replaces two modules of the running app with the code the
+# student submitted, so it must never be reachable anonymously: the decorator
+# below used to be commented out, which made the write (and the import of that
+# code by the app) available to any unauthenticated caller.
+@authentication_decorator
 def log_function_checker(request):
     if request.method == 'POST':
         csrf_token = request.POST.get("csrfmiddlewaretoken")
         log_code = request.POST.get('log_code')
         api_code = request.POST.get('api_code')
-        dirname = os.path.dirname(__file__)
-        log_filename = os.path.join(dirname, "playground/A9/main.py")
-        api_filename = os.path.join(dirname, "playground/A9/api.py")
-        f = open(log_filename,"w")
-        f.write(log_code)
-        f.close()
-        f = open(api_filename,"w")
-        f.write(api_code)
-        f.close()
+        # write_lab_code() picks the destination itself from a fixed allowlist,
+        # caps the size and refuses code that does not parse; both submissions
+        # are validated before either module is replaced, and each replacement
+        # is atomic. Running the student's code is still the exercise - that is
+        # not made safe here, see introduction/utility.py.
+        try:
+            validate_lab_code(log_code)
+            validate_lab_code(api_code)
+            write_lab_code('A9_log', log_code)
+            write_lab_code('A9_api', api_code)
+        except LabCodeRejected as rejected:
+            return JsonResponse({"message": "invalid code: {}".format(rejected)}, status=400)
+        except OSError:
+            return JsonResponse({"message": "code could not be saved"}, status=500)
         # Clearing the log file before starting the test
         f = open('test.log', 'w')
         f.write("")
@@ -124,16 +134,18 @@ def A6_disscussion_api(request):
     except Exception as e:
         return JsonResponse({"message":"failure"},status = 400)
 
+# Same coding ground contract as log_function_checker: the submission replaces
+# a module of the running app, so it stays behind authentication.
+@authentication_decorator
 def A6_disscussion_api_2(request):
     if request.method != 'POST':
         return JsonResponse({"message":"method not allowed"},status = 405)
+    code = request.POST.get('code')
+    # Server chosen destination, size cap and syntax check (see utility.py).
     try:
-        code = request.POST.get('code')
-        dirname = os.path.dirname(__file__)
-        filename = os.path.join(dirname, "playground/A6/utility.py")
-        f = open(filename,"w")
-        f.write(code)
-        f.close()
-    except:
-        return JsonResponse({"message":"missing code"},status = 400)
+        write_lab_code('A6_utility', code)
+    except LabCodeRejected as rejected:
+        return JsonResponse({"message": "invalid code: {}".format(rejected)}, status=400)
+    except OSError:
+        return JsonResponse({"message": "code could not be saved"}, status=500)
     return JsonResponse({"message":"success"},status = 200)

@@ -39,6 +39,12 @@ event3 = function(){
     .then(response => response.text())
     .then(result => {
         let data = JSON.parse(result);  // parse JSON string into object
+        if (!data.logs) {
+            // The endpoint refuses code that is missing, too large or does not
+            // parse, so show why instead of failing silently.
+            alert(data.message);
+            return;
+        }
         console.log(data.logs);
         document.getElementById("a9_d3").style.display = 'flex';
         for (var i = 0; i < data.logs.length; i++) {

@@ -5,6 +5,7 @@ import operator
 import os
 import re
 import socket
+import tempfile
 import uuid
 from urllib.parse import urlsplit, urlunsplit
 
@@ -300,3 +301,96 @@ def verify_password(password, stored_hash):
     if not is_password_hash(stored_hash):
         return False
     return check_password(password, stored_hash)
+
+
+# ---------------------------------------------------------------------------
+# Lab code drop for the A6 / A9 coding grounds (CWE-93 / CWE-434).
+#
+# Those two exercises let a signed-in student submit the source of a playground
+# module, which the running app then imports. Executing that module IS the
+# exercise, so these helpers deliberately do NOT claim to sandbox it: a
+# denylist or regex over Python source is not a sandbox, and the only real
+# containment is running the submission in an isolated interpreter/container.
+# The endpoints therefore stay behind authentication, and everything about the
+# write itself is constrained here:
+#   * the destination is chosen by the server from a fixed allowlist, so no
+#     part of the request can steer the path (no traversal, no new module),
+#   * the payload is size limited,
+#   * it must parse as Python before anything is written (compile() only
+#     builds the code object, it never runs it), so a broken or truncated
+#     submission cannot take the whole site down for every other user,
+#   * both files of a submission are validated before either is replaced, and
+#     each file is replaced atomically, so no importer can ever observe a half
+#     written module.
+# ---------------------------------------------------------------------------
+
+# Playground modules a student may replace, keyed by a server side name. The
+# values are relative to the playground package and never come from a request.
+_LAB_CODE_TARGETS = {
+    'A6_utility': 'A6/utility.py',
+    'A9_log': 'A9/main.py',
+    'A9_api': 'A9/api.py',
+}
+
+_LAB_CODE_ROOT = os.path.realpath(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'playground'))
+
+LAB_CODE_MAX_BYTES = 16 * 1024
+
+
+class LabCodeRejected(ValueError):
+    """Raised when submitted lab code is missing, too large or not Python."""
+
+
+def lab_code_path(target):
+    """Return the absolute path of the allowlisted playground module *target*."""
+    relative = _LAB_CODE_TARGETS.get(target) if isinstance(target, str) else None
+    if relative is None:
+        raise LabCodeRejected('unknown lab code target')
+    path = os.path.realpath(os.path.join(_LAB_CODE_ROOT, relative))
+    # Defence in depth: the table above is static, so this can only trip if it
+    # is edited badly - never because of request data.
+    if path != _LAB_CODE_ROOT and not path.startswith(_LAB_CODE_ROOT + os.sep):
+        raise LabCodeRejected('lab code target escapes the playground')
+    return path
+
+
+def validate_lab_code(code):
+    """Return *code* when it is an acceptable Python module, else raise.
+
+    Only the shape of the submission is checked (present, bounded, parseable).
+    Nothing in here makes the submitted code safe to run.
+    """
+    if not isinstance(code, str) or not code.strip():
+        raise LabCodeRejected('no code submitted')
+    if len(code.encode('utf-8', 'surrogatepass')) > LAB_CODE_MAX_BYTES:
+        raise LabCodeRejected('code is larger than {} bytes'.format(LAB_CODE_MAX_BYTES))
+    try:
+        compile(code, '<lab code>', 'exec')
+    except (SyntaxError, ValueError, MemoryError, RecursionError):
+        raise LabCodeRejected('code is not valid Python')
+    return code
+
+
+def write_lab_code(target, code):
+    """Install *code* as the allowlisted playground module *target*.
+
+    Validates first and then replaces the file atomically. Returns the path
+    that was written.
+    """
+    path = lab_code_path(target)
+    code = validate_lab_code(code)
+    # The scratch file is not importable (leading dot, no .py suffix), so no
+    # autoreloader or importer picks it up before the atomic replace below.
+    handle, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path),
+                                        prefix='.lab_code_', suffix='.tmp')
+    try:
+        with os.fdopen(handle, 'w', encoding='utf-8') as tmp_file:
+            tmp_file.write(code)
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    return path

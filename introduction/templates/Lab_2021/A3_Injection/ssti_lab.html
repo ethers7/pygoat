@@ -29,7 +29,12 @@
 
 <button class="coll2 btn btn-info" style= "position : fixed ; right :200px; bottom : 7px">View Code</button>
 <div class="lab code">
-   <code>   
+    <p style="color:#626262">This lab used to build a Django template out of your post and write it into the
+        template directory, so the next page load <em>compiled</em> whatever you typed: a
+        <code>{&#37; ... &#37;}</code> tag ran on the server. The post is now stored as data and handed to one
+        fixed template as context, so the engine escapes it. Compare the two versions below - the difference is
+        template <b>source</b> versus template <b>context</b>.</p>
+   <code>
 def ssti_lab(request):</br>
 &emsp;if request.user.is_authenticated:</br>
 &emsp;&emsp;if request.method=="GET":</br>
@@ -38,26 +43,28 @@ def ssti_lab(request):</br>
 &emsp;&emsp;elif request.method=="POST":</br>
 &emsp;&emsp;&emsp;blog = request.POST["blog"]</br>
 &emsp;&emsp;&emsp;id = str(uuid.uuid4()).split('-')[-1]</br>
-
-&emsp;&emsp;&emsp;blog = filter_blog(blog)</br>
-&emsp;&emsp;&emsp;prepend_code = "{&#37; extends 'introduction/base.html' &#37;}\</br>
-&emsp;&emsp;&emsp;&emsp;{&#37; block content &#37;}{&#37; block title &#37;}\</br>
-&emsp;&emsp;&emsp;&emsp;<title>SSTI-Blogs</title>\</br>
-&emsp;&emsp;&emsp;&emsp;{&#37; endblock &#37;}"</br>
 &emsp;&emsp;&emsp;</br>
-&emsp;&emsp;&emsp;blog = prepend_code + blog + "{&#37; endblock &#37;}"</br>
-&emsp;&emsp;&emsp;new_blog = Blogs.objects.create(author = request.user, blog_id = id)</br>
-&emsp;&emsp;&emsp;new_blog.save() </br>
-&emsp;&emsp;&emsp;dirname = os.path.dirname(__file__)</br>
-&emsp;&emsp;&emsp;filename = os.path.join(dirname, f"templates/Lab_2021/A3_Injection/Blogs/{id}.html")</br>
-&emsp;&emsp;&emsp;file = open(filename, "w+") </br>
-&emsp;&emsp;&emsp;file.write(blog)</br>
-&emsp;&emsp;&emsp;file.close()</br>
+&emsp;&emsp;&emsp;# vulnerable version: the post became template source on disk</br>
+&emsp;&emsp;&emsp;# blog = prepend_code + blog + "{&#37; endblock &#37;}"</br>
+&emsp;&emsp;&emsp;# open(f"templates/Lab_2021/A3_Injection/Blogs/{id}.html", "w+").write(blog)</br>
+&emsp;&emsp;&emsp;</br>
+&emsp;&emsp;&emsp;# fixed version: the post is stored as data</br>
+&emsp;&emsp;&emsp;new_blog = Blogs.objects.create(author=request.user, blog_id=id, content=blog)</br>
+&emsp;&emsp;&emsp;new_blog.save()</br>
 &emsp;&emsp;&emsp;return redirect(f'blog/{id}')</br>
 &emsp;else:</br>
 &emsp;&emsp;return redirect('login')</br>
+</br>
+def ssti_view_blog(request, blog_id):</br>
+&emsp;if request.user.is_authenticated:</br>
+&emsp;&emsp;if request.method=="GET":</br>
+&emsp;&emsp;&emsp;blog = Blogs.objects.filter(blog_id=blog_id).first()</br>
+&emsp;&emsp;&emsp;if blog is None:</br>
+&emsp;&emsp;&emsp;&emsp;return HttpResponseBadRequest()</br>
+&emsp;&emsp;&emsp;# one fixed template, the body passed as autoescaped context</br>
+&emsp;&emsp;&emsp;return render(request, "Lab_2021/A3_Injection/ssti_blog.html", {"blog": blog})</br>
    </code>
-    
+
 </div>
 <div>
 

@@ -9,13 +9,16 @@ fails upstream on a missing font). Gunicorn smoke uses DEBUG=True. Tests force
 plain StaticFilesStorage so we gate routes/auth, not WhiteNoise manifests.
 """
 import hashlib
+import os
+import shutil
+import tempfile
 from unittest import mock
 
 from django.contrib.auth.models import User
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
-from .models import CF_user, CSRF_user_tbl, authLogin
+from .models import Blogs, CF_user, CSRF_user_tbl, authLogin
 from .utility import hash_password
 
 
@@ -301,6 +304,163 @@ class AuthLabResponseRenderingTests(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertContains(r, "Logout successful")
         self.assertEqual(r.cookies["userid"].value, "")
+
+
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+)
+class LabCodeGroundTests(TestCase):
+    """The A6/A9 coding grounds still install submitted code, but not for anyone.
+
+    Request data used to be written verbatim into modules of the running app by
+    endpoints that were reachable anonymously (CWE-93). The exercises keep
+    working for a signed-in student; the write is now authenticated, bounded,
+    syntax checked and aimed at a server chosen path.
+    """
+
+    PASSWORD = "Str0ng-Passw0rd!"
+    LOG_CODE = "class Log:\n    def __init__(self, request):\n        pass\n"
+    API_CODE = "def log_function_target(request):\n    return None\n"
+    A6_CODE = "def check_vuln(mods):\n    return []\n"
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="labuser",
+            email="labuser@example.com",
+            password=self.PASSWORD,
+        )
+        # Point the allowlist at a scratch playground so the tests never
+        # overwrite the modules shipped in the repository.
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root, True)
+        for package in ("A6", "A9"):
+            os.mkdir(os.path.join(self.root, package))
+        patcher = mock.patch("introduction.utility._LAB_CODE_ROOT", self.root)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _written(self, *parts):
+        with open(os.path.join(self.root, *parts), encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_anonymous_callers_cannot_write_lab_modules(self):
+        for url, data in (("/2021/discussion/A9/api",
+                           {"log_code": self.LOG_CODE, "api_code": self.API_CODE}),
+                          ("/2021/discussion/A6/api2", {"code": self.A6_CODE})):
+            r = self.client.post(url, data)
+            self.assertEqual(r.status_code, 302, msg=url)
+            self.assertIn("/login", r["Location"])
+        self.assertEqual(os.listdir(os.path.join(self.root, "A6")), [])
+        self.assertEqual(os.listdir(os.path.join(self.root, "A9")), [])
+
+    def test_a6_ground_still_saves_a_signed_in_submission(self):
+        self.client.force_login(self.user)
+        r = self.client.post("/2021/discussion/A6/api2", {"code": self.A6_CODE})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["message"], "success")
+        self.assertEqual(self._written("A6", "utility.py"), self.A6_CODE)
+
+    def test_a6_ground_refuses_missing_oversized_and_broken_code(self):
+        self.client.force_login(self.user)
+        for code in ("", "def broken(:\n", "# pad\n" * 20000):
+            r = self.client.post("/2021/discussion/A6/api2", {"code": code})
+            self.assertEqual(r.status_code, 400, msg=repr(code[:20]))
+            self.assertIn("invalid code", r.json()["message"])
+        self.assertEqual(os.listdir(os.path.join(self.root, "A6")), [])
+
+    def test_a9_ground_installs_both_modules_and_keeps_forwarding_csrf(self):
+        self.client.force_login(self.user)
+        with mock.patch("introduction.apis.requests.request") as probe:
+            r = self.client.post("/2021/discussion/A9/api",
+                                 {"log_code": self.LOG_CODE,
+                                  "api_code": self.API_CODE,
+                                  "csrfmiddlewaretoken": "lab-token"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["message"], "success")
+        self.assertEqual(self._written("A9", "main.py"), self.LOG_CODE)
+        self.assertEqual(self._written("A9", "api.py"), self.API_CODE)
+        # The probe requests must keep carrying this caller's CSRF token.
+        unsafe = [call for call in probe.call_args_list if call[0][0] != "GET"]
+        self.assertTrue(unsafe)
+        for call in unsafe:
+            self.assertEqual(call[1]["headers"]["X-CSRFToken"], "lab-token")
+
+    def test_a9_ground_refuses_a_broken_submission_without_writing_either_module(self):
+        self.client.force_login(self.user)
+        with mock.patch("introduction.apis.requests.request") as probe:
+            r = self.client.post("/2021/discussion/A9/api",
+                                 {"log_code": self.LOG_CODE,
+                                  "api_code": "def broken(:\n"})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("invalid code", r.json()["message"])
+        probe.assert_not_called()
+        self.assertEqual(os.listdir(os.path.join(self.root, "A9")), [])
+
+
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+)
+class SstiLabStorageTests(TestCase):
+    """The SSTI lab stores posts as data instead of as template source.
+
+    A post used to be concatenated into a template and written into the
+    template directory, so the next render compiled it (CWE-93 / CWE-1336).
+    Posting and reading a blog must still work, the payload must come back
+    escaped, and no template file may be created.
+    """
+
+    PASSWORD = "Str0ng-Passw0rd!"
+    PAYLOAD = "{% debug %}{{ 7*7 }}<script>alert(1)</script>"
+    BLOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "templates", "Lab_2021", "A3_Injection", "Blogs")
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="sstiuser",
+            email="sstiuser@example.com",
+            password=self.PASSWORD,
+        )
+        self.client.force_login(self.user)
+
+    def _blog_templates(self):
+        if not os.path.isdir(self.BLOG_DIR):
+            return set()
+        return set(os.listdir(self.BLOG_DIR))
+
+    def test_posting_a_blog_stores_it_and_writes_no_template(self):
+        before = self._blog_templates()
+        r = self.client.post("/ssti/lab", {"blog": self.PAYLOAD})
+        self.assertEqual(r.status_code, 302)
+        blog = Blogs.objects.get(author=self.user)
+        self.assertEqual(blog.content, self.PAYLOAD)
+        self.assertIn(blog.blog_id, r["Location"])
+        self.assertEqual(self._blog_templates(), before)
+
+    def test_viewing_a_blog_escapes_the_payload_instead_of_executing_it(self):
+        self.client.post("/ssti/lab", {"blog": self.PAYLOAD})
+        blog = Blogs.objects.get(author=self.user)
+        r = self.client.get("/ssti/blog/" + blog.blog_id)
+        self.assertEqual(r.status_code, 200)
+        self.assertNotContains(r, "<script>alert(1)</script>")
+        self.assertContains(r, "&lt;script&gt;alert(1)&lt;/script&gt;")
+        # The tag and the expression are shown as text, not evaluated.
+        self.assertContains(r, "{% debug %}")
+        self.assertContains(r, "{{ 7*7 }}")
+
+    def test_unknown_blog_id_is_rejected(self):
+        r = self.client.get("/ssti/blog/../../../etc/passwd")
+        self.assertIn(r.status_code, (400, 404))
+        r = self.client.get("/ssti/blog/nosuchblog")
+        self.assertEqual(r.status_code, 400)
+
+    def test_blog_list_still_shows_the_users_posts(self):
+        self.client.post("/ssti/lab", {"blog": "hello lab"})
+        blog = Blogs.objects.get(author=self.user)
+        r = self.client.get("/ssti/lab")
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, blog.blog_id)
 
 
 @override_settings(
