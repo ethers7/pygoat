@@ -8,6 +8,8 @@ DEBUG=False, so {% static %} blows up without collectstatic (and collectstatic
 fails upstream on a missing font). Gunicorn smoke uses DEBUG=True. Tests force
 plain StaticFilesStorage so we gate routes/auth, not WhiteNoise manifests.
 """
+from unittest import mock
+
 from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -86,6 +88,29 @@ class PlatformRegressionTests(TestCase):
             self.client.login(username="newgate", password=self.PASSWORD)
         )
         self.assertEqual(self.client.get("/").status_code, 200)
+
+    def test_cmd_lab_runs_lookup_without_shell(self):
+        """Lab still runs the lookup, but as an argv list with no shell."""
+        self.client.force_login(self.user)
+        with mock.patch("introduction.views.subprocess.Popen") as popen:
+            popen.return_value.communicate.return_value = (b"1.2.3.4", b"")
+            r = self.client.post("/cmd_lab", {"domain": "example.com", "os": "linux"})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "1.2.3.4")
+        args, kwargs = popen.call_args
+        self.assertEqual(args[0], ["dig", "example.com"])
+        self.assertFalse(kwargs.get("shell", False))
+
+    def test_cmd_lab_rejects_shell_metacharacters(self):
+        """Injection payloads never reach a subprocess call."""
+        self.client.force_login(self.user)
+        for payload in ("example.com; id", "example.com && id", "example.com | id",
+                        "$(id)", "`id`", "-oG/tmp/x"):
+            with mock.patch("introduction.views.subprocess.Popen") as popen:
+                r = self.client.post("/cmd_lab", {"domain": payload, "os": "linux"})
+            self.assertEqual(r.status_code, 200, msg=payload)
+            self.assertContains(r, "Invalid domain", msg_prefix=payload)
+            popen.assert_not_called()
 
     def test_login_post(self):
         r = self.client.post(

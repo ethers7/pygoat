@@ -1,8 +1,24 @@
 import hashlib
 import os
+import re
 import uuid
 
 from .models import *
+
+# Allowlist for host arguments handed to lookup/scan commands (dig, nslookup,
+# nmap). Only DNS label characters and IP notation are accepted, so no shell
+# metacharacter and no leading dash (option injection) can reach the argv.
+_HOST_RE = re.compile(r'\A[A-Za-z0-9](?:[A-Za-z0-9._-]{0,251}[A-Za-z0-9])?\Z')
+
+
+def validate_host(host):
+    """Return a normalised hostname/IP, or None when it is not allowlisted."""
+    if not isinstance(host, str):
+        return None
+    host = host.strip().rstrip('.')
+    if not _HOST_RE.match(host):
+        return None
+    return host
 
 
 # import re
