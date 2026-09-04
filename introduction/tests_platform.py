@@ -112,6 +112,29 @@ class PlatformRegressionTests(TestCase):
             self.assertContains(r, "Invalid domain", msg_prefix=payload)
             popen.assert_not_called()
 
+    def test_cmd_lab2_calculates_without_eval(self):
+        """Lab 2 still answers arithmetic, but code payloads are refused."""
+        self.client.force_login(self.user)
+        r = self.client.post("/cmd_lab2", {"val": "7 * 7"})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "49")
+        for payload in ("__import__('os').system('id')", "os.system('id')",
+                        "open('/etc/passwd').read()", "9 ** 9 ** 9"):
+            r = self.client.post("/cmd_lab2", {"val": payload})
+            self.assertEqual(r.status_code, 200, msg=payload)
+            self.assertContains(r, "Invalid expression", msg_prefix=payload)
+
+    def test_mitre_lab_25_api_calculates_without_eval(self):
+        """CWE-94 calculator API returns results and rejects code payloads."""
+        r = self.client.post("/mitre/25/lab/api", {"expression": "1 + 1"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["result"], 2)
+        for payload in ("__import__('os').system('id')", "os.system('id')",
+                        "().__class__.__bases__[0].__subclasses__()"):
+            r = self.client.post("/mitre/25/lab/api", {"expression": payload})
+            self.assertEqual(r.status_code, 400, msg=payload)
+            self.assertIn("Invalid expression", r.json()["error"])
+
     def test_login_post(self):
         r = self.client.post(
             reverse("login"),

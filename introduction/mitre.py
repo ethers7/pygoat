@@ -12,7 +12,7 @@ from django.views.decorators.csrf import csrf_exempt
 from pygoat.settings import CSRF_LAB_JWT_KEY
 
 from .models import CSRF_user_tbl
-from .utility import validate_host
+from .utility import UnsafeExpression, safe_arithmetic_eval, validate_host
 from .views import authentication_decorator
 
 # import os
@@ -219,7 +219,12 @@ def csrf_transfer_monei_api(request,recipent,amount):
 def mitre_lab_25_api(request):
     if request.method == "POST":
         expression = request.POST.get('expression')
-        result = eval(expression)
+        try:
+            # Calculator: the expression is parsed and only arithmetic on
+            # numeric literals is calculated, never executed as python code.
+            result = safe_arithmetic_eval(expression)
+        except UnsafeExpression as error:
+            return JsonResponse({'error': 'Invalid expression: {}'.format(error)}, status=400)
         return JsonResponse({'result': result})
     else:
         return redirect('/mitre/25/lab/')

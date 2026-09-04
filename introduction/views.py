@@ -35,8 +35,8 @@ from requests.structures import CaseInsensitiveDict
 from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
-from .utility import (customHash, filter_blog, validate_fetch_url,
-                      validate_host)
+from .utility import (UnsafeExpression, customHash, filter_blog,
+                      safe_arithmetic_eval, validate_fetch_url, validate_host)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -477,9 +477,12 @@ def cmd_lab2(request):
             
             print(val)
             try:
-                output = eval(val)
-            except:
-                output = "Something went wrong"
+                # The expression is parsed and only arithmetic on numeric
+                # literals is calculated, so python payloads such as
+                # os.system("id") are rejected instead of being executed.
+                output = safe_arithmetic_eval(val)
+            except UnsafeExpression as error:
+                output = "Invalid expression: {}".format(error)
                 return render(request,'Lab/CMD/cmd_lab2.html',{"output":output})
             print("Output = ", output)
             return render(request,'Lab/CMD/cmd_lab2.html',{"output":output})

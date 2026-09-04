@@ -34,7 +34,7 @@
                 .then(response => response.text())
                 .then(result => {
                     var data = JSON.parse(result);
-                    output.value = data.result;
+                    output.value = (data.result !== undefined) ? data.result : data.error;
                     console.log(result);
                 })
                 .catch(

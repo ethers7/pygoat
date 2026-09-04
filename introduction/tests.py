@@ -5,7 +5,46 @@ from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
 from .models import comments
-from .utility import validate_fetch_url
+from .utility import UnsafeExpression, safe_arithmetic_eval, validate_fetch_url
+
+
+class SafeArithmeticEvalTests(SimpleTestCase):
+    """The calculator labs must compute arithmetic and never execute code."""
+
+    def test_calculates_arithmetic_expressions(self):
+        self.assertEqual(safe_arithmetic_eval("1 + 1"), 2)
+        self.assertEqual(safe_arithmetic_eval("7*7"), 49)
+        self.assertEqual(safe_arithmetic_eval(" (2 + 3) * -4 "), -20)
+        self.assertEqual(safe_arithmetic_eval("7 % 4"), 3)
+        self.assertEqual(safe_arithmetic_eval("7 // 2"), 3)
+        self.assertEqual(safe_arithmetic_eval("2 ** 8"), 256)
+        self.assertAlmostEqual(safe_arithmetic_eval("1.5 / 0.5"), 3.0)
+
+    def test_rejects_code_execution_payloads(self):
+        for payload in ("os.system('id')",
+                        "__import__('os').system('id')",
+                        "__import__('os').popen('id').read()",
+                        "eval('1+1')",
+                        "open('/etc/passwd').read()",
+                        "().__class__.__bases__[0].__subclasses__()",
+                        "[x for x in (1, 2)]",
+                        "{'a': 1}",
+                        "'abc' * 3",
+                        "print(1)",
+                        "1 if True else 2",
+                        "FLAG",
+                        "1 == 1",
+                        "1 & 2",
+                        "import os"):
+            with self.assertRaises(UnsafeExpression, msg=payload):
+                safe_arithmetic_eval(payload)
+
+    def test_rejects_resource_exhaustion_and_bad_input(self):
+        for payload in ("9 ** 9 ** 9", "10 ** 100000", "99999 ** 99999",
+                        "1 / 0", "", "   ", "1 +", "1" * 200):
+            with self.assertRaises(UnsafeExpression, msg=payload):
+                safe_arithmetic_eval(payload)
+        self.assertRaises(UnsafeExpression, safe_arithmetic_eval, None)
 
 
 class ValidateFetchUrlTests(SimpleTestCase):

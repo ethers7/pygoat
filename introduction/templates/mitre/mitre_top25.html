@@ -30,7 +30,13 @@
   <div class="lab">
     <p class="bp">
     This lab have a calculator with can compute simple arithmetic operations.
-    Try to exploit that</p> 
+    It used to hand the submitted expression to python's <code>eval()</code>, so a payload such as
+    <code>__import__('os').system('id')</code> was executed by the server.
+    <br><br>
+    The calculator has been fixed: the expression is now parsed with the <code>ast</code> module and only numeric
+    literals and the arithmetic operators <code>+ - * / // % **</code> are calculated. Names, calls, attributes and
+    subscripts are refused, so no code is executed. Try the payloads and observe that they are rejected while
+    <code>7 * 7</code> still returns <code>49</code>.</p>
     <div align="right">
       <button class="btn btn-info" type="button" onclick="window.location.href='/mitre/25/lab'">
         Access Lab

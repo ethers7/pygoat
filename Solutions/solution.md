@@ -39,13 +39,15 @@ This should give you the output for both`ns lookup` as well as for the `ifconfig
 ![cmd_inj_2](https://user-images.githubusercontent.com/70275323/154504361-4baa73cb-f73b-44a8-8769-0af2e7b53c24.png)
 
 ### Command Injection Lab 2
-We are given an input form where we can calculate basic arithmetic expressions. Our task is to exploit this functionality and achieve code execution. 
+We are given an input form where we can calculate basic arithmetic expressions.
 
-This lab is using `eval()` function in backend which is used to evaluate expression in python. If the expression is a legal python statement, then it will be executed. 
+This lab used to pass the input to python's `eval()` function, so any legal python expression was executed by the server. Submitting `__import__("os").system("id")` showed nothing in the page while the command actually ran on the server, and `__import__("os").system("sleep 30")` made the request take 30 seconds.
 
-If we submit the expression `1 + 1`, we get the output as `2`. Similarly, on submitting the expression `7 * 7`, we get the output as `49`.
+The lab is now fixed and no longer uses `eval()`. The input is parsed with the `ast` module and the parse tree is walked, so only numeric literals and the arithmetic operators `+ - * / // % **` (plus unary `+`/`-` and parentheses) are calculated; oversized exponentiations are refused as well.
 
-Now, if we submit `os.system("id")`, we get nothing in the output. But if we check the terminal, we will see that the command gets executed and the result is printed on the terminal screen. You can also verify this by submitting `os.system("sleep 30")`, and you will notice that the request completes after 30 seconds.
+If we submit the expression `1 + 1`, we still get the output as `2`, and `7 * 7` still gives `49`. Every code-execution payload (any name, call, attribute or subscript) is now answered with `Invalid expression` instead of being executed. Note that keeping `eval()` with a restricted `__builtins__` mapping would not be a fix - such sandboxes are bypassable.
+
+The same fix applies to the CWE-94 calculator lab (`/mitre/25/lab`), which shared the identical `eval()` flaw.
 
 ## A2:Broken Authentication
 

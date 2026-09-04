@@ -93,14 +93,15 @@
 
                 <br><b>Challenge Description:</b><br>
                 In this challenge, we are given an input box, where we can calculate any arithmetic expression such as <code>1 + 1</code> or <code>5 * 5</code> etc.
-                Your task is to exploit this input form and achieve command execution on the system.
+                This input form used to reach <code>eval()</code>, which allowed command execution on the system. Try the payloads below and see how the fixed version answers.
                 <br><br>
             <b>Challenge Solution:</b><br>
-                We know that this application is using the <code>eval()</code> function in the backend to calculate the output. Instead of submitting arithmetic expressions, we can also submit python3 commands, which will be executed by the <code>eval()</code> function.
+                When the application passed the input to <code>eval()</code>, we could submit python3 code instead of an arithmetic expression and it was executed by the server. Submitting <code>__import__("os").system("id")</code> printed nothing in the page, but the command ran on the server (<code>__import__("os").system("sleep 30")</code> made the request take 30 seconds).
                 <br><br>
                 First, if we submit the expression <code>1 + 1</code>, we get the output as <code>2</code>. Similarly, on submitting the expression <code>7 * 7</code>, we get the output as <code>49</code>.
                 <br><br>
-                Now, if we submit <code>os.system("id")</code>, we get nothing in the output. But if we check the terminal, we will see that the command gets executed and the result is printed on the terminal screen. You can also verify this by submitting <code>os.system("sleep 30")</code>, and you will notice that the request completes after 30 seconds.</code>
+            <b>How it was fixed:</b><br>
+                <code>eval()</code> is gone. The submitted text is parsed with python's <code>ast</code> module and the parse tree is walked: only numeric literals and the arithmetic operators <code>+ - * / // % **</code> (with unary <code>+</code>/<code>-</code> and parentheses) are calculated, and oversized exponentiations are refused so a payload cannot burn CPU. Any name, function call, attribute or subscript - everything the payloads above rely on - is rejected with <code>Invalid expression</code>, so no code is executed. Note that a restricted <code>__builtins__</code> dictionary passed to <code>eval()</code> would <b>not</b> be a fix: those sandboxes are routinely bypassed.
                 <br><br>
             </p>
 
