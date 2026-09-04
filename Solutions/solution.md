@@ -288,6 +288,8 @@ The cookie decodes to ```{"admin": 0}``` - flip the value to ```{"admin": 1}```,
 
 The app deserialises this cookie with a data-only format (JSON), so tampering can only change data, it can no longer be escalated to remote code execution the way a pickle payload could. The access control lesson stands: never trust a client supplied object for authorisation.
 
+The `token` cookie is set `HttpOnly`, `SameSite=Lax` and `Secure`, so `document.cookie` cannot read it: edit it in the browser developer tools (Application > Cookies) or in an intercepting proxy such as BurpSuite. On a plain-HTTP run, start PyGoat with `PYGOAT_INSECURE_COOKIES=1` (see the [README](/README.md#cookie-security-flag-plain-http-opt-out)) or the browser will not send the cookie back at all.
+
 ## A9:Using Components with Know Vulnerability
 
 The user on accessing the lab is provided with a feature to convert yaml files into json objects. The user needs to choose an yaml file and click upload to get the json data. There is also a get version feature which tells the user the version of the library the app uses. 
@@ -518,6 +520,7 @@ This results as being logged in as Admin
    - We can chage the cookie value with `"Admin|2022-07-07 06:24:08.802299"` ( Admin/admin/some other common admin name )
    - after some guessing we got "admin|2022-07-07 06:24:08.802299" is the admin cookie , which gives us admin access.
    - ![image](https://user-images.githubusercontent.com/75058161/177698238-b564faa9-7a98-4333-8498-0069c41a85d1.png)
+   - the cookie is set `HttpOnly`, `SameSite=Lax` and `Secure`, so it is not visible to `document.cookie`: rewrite it from the developer tools (Application > Cookies) or from a proxy, and on a plain-HTTP run start PyGoat with `PYGOAT_INSECURE_COOKIES=1` (see the [README](/README.md#cookie-security-flag-plain-http-opt-out)). The weakness being exercised is unchanged: the identity travels in a cookie the client can rewrite, unsigned and unencrypted.
 #
 ## 2021-A6:Using Components with Known Vulnerabilities
 

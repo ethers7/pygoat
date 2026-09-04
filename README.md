@@ -15,6 +15,8 @@ Table of Contents
       * [From Sources](#from-sources)
       * [Docker Container](#docker-container)
       * [Installation Video](#installation-video)
+   * [Configuration](#configuration)
+      * [Cookie security flag (plain HTTP opt-out)](#cookie-security-flag-plain-http-opt-out)
    * [Uninstallation](#uninstallation)
    * [Solutions](/Solutions/solution.md)
    * [For Developers](/docs/dev_guide.md)
@@ -102,6 +104,45 @@ docker compose exec web python manage.py populate_challenges
 3. Install with Mac M1 (using Virtualenv)
  - [![](http://img.youtube.com/vi/rfzQiMeiwso/0.jpg)](https://youtu.be/a5UV7mUw580 "Install with Mac M1 - using Virtualenv")
 
+
+## Configuration
+
+### Cookie security flag (plain HTTP opt-out)
+
+The cookies the lessons set themselves (`token`, `userid`, `cookie`, `auth_cookie`,
+`auth_cookiee`, `session_id`) carry authentication or session state, so they are set with
+`HttpOnly`, `SameSite=Lax` and `Secure` **by default**. Browsers only send a `Secure` cookie back
+over HTTPS, and PyGoat is usually served over plain HTTP (`python3 manage.py runserver` and the
+container both listen on `http://127.0.0.1:8000`), so for a plain-HTTP run you must opt out
+explicitly - otherwise the browser drops those cookies and the cookie based labs (broken
+authentication, insecure deserialization, cryptographic failure lab 3, security misconfiguration
+lab 3, CSRF) look like they do nothing:
+
+```bash
+# only for local, plain-HTTP runs
+PYGOAT_INSECURE_COOKIES=1 python3 manage.py runserver
+```
+
+```bash
+# same thing for the container
+docker run --rm -p 8000:8000 -e PYGOAT_INSECURE_COOKIES=1 pygoat/pygoat:latest
+```
+
+or add it to the `environment:` block of the `web` service in `docker-compose.yml`:
+
+```yaml
+    environment:
+      - PYGOAT_INSECURE_COOKIES=1
+```
+
+Accepted opt-out values are `1`, `true`, `yes` and `on` (case-insensitive). Anything else -
+including leaving the variable unset - keeps the secure behaviour. When PyGoat is served over
+HTTPS, leave the variable unset; if the deployment already sets `SESSION_COOKIE_SECURE` or
+`SECURE_SSL_REDIRECT` in `pygoat/settings.py`, `Secure` stays on whatever this variable says.
+`HttpOnly` and `SameSite=Lax` are always applied and are not configurable, so those cookies are not
+readable from `document.cookie` - use the browser developer tools (Application > Cookies) or an
+intercepting proxy such as BurpSuite to inspect and tamper with them, which is what the
+[solutions](/Solutions/solution.md) do anyway.
 
 ## Uninstallation
 

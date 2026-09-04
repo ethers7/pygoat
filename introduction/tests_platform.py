@@ -8,6 +8,7 @@ DEBUG=False, so {% static %} blows up without collectstatic (and collectstatic
 fails upstream on a missing font). Gunicorn smoke uses DEBUG=True. Tests force
 plain StaticFilesStorage so we gate routes/auth, not WhiteNoise manifests.
 """
+import base64
 import hashlib
 import os
 import shutil
@@ -19,7 +20,7 @@ from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
 from . import views
-from .models import Blogs, CF_user, CSRF_user_tbl, authLogin
+from .models import AF_session_id, Blogs, CF_user, CSRF_user_tbl, authLogin
 from .utility import hash_password
 
 
@@ -673,3 +674,122 @@ class CsrfProtectionTests(TestCase):
         r = self.client.post(reverse("xxe_parse"), data=body,
                              content_type="text/xml", HTTP_X_CSRFTOKEN=token)
         self.assertEqual(r.status_code, 200)
+
+
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+)
+class LabCookieAttributeTests(TestCase):
+    """The cookies the lessons set carry HttpOnly/SameSite/Secure (CWE-614/1004).
+
+    Each of these cookies holds authentication or session state - a JWT, a
+    session id, or the `userid` the broken-auth lab treats as an identity - and
+    they used to be set with no attributes at all (the auth lab even sent
+    `samesite=None, secure=False` and kept the identity for a year). The
+    exercises are unchanged: the values are the same and developer tools or a
+    proxy still show and rewrite them; the browser just no longer hands them to
+    document.cookie, to cross-site subresource requests or to plaintext HTTP.
+    """
+
+    PASSWORD = "Str0ng-Passw0rd!"
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="cookieuser",
+            email="cookieuser@example.com",
+            password=self.PASSWORD,
+        )
+        self.client.force_login(self.user)
+
+    def _assert_hardened(self, response, name):
+        """Assert the named cookie of *response* carries all three attributes."""
+        self.assertIn(name, response.cookies, msg=name)
+        morsel = response.cookies[name]
+        self.assertTrue(morsel["httponly"], msg=name)
+        self.assertEqual(morsel["samesite"], "Lax", msg=name)
+        self.assertTrue(morsel["secure"], msg=name)
+        return morsel
+
+    def test_insecure_deserialization_lab_token_cookie(self):
+        r = self.client.get("/insec_des_lab")
+        self.assertEqual(r.status_code, 200)
+        morsel = self._assert_hardened(r, "token")
+        # The lab still hands out the tamperable {"admin": 0} token.
+        self.assertEqual(base64.b64decode(morsel.value), b'{"admin": 0}')
+
+    def test_auth_lab_signup_userid_cookie_is_not_kept_for_a_year(self):
+        r = self.client.post("/auth_lab/signup",
+                             {"name": "Jack", "username": "authcookie1",
+                              "pass": "pw"})
+        self.assertEqual(r.status_code, 200)
+        morsel = self._assert_hardened(r, "userid")
+        obj = authLogin.objects.get(username="authcookie1")
+        self.assertEqual(morsel.value, str(obj.userid))
+        self.assertEqual(int(morsel["max-age"]), views.AUTH_LAB_COOKIE_MAX_AGE)
+        self.assertLessEqual(views.AUTH_LAB_COOKIE_MAX_AGE, 24 * 60 * 60)
+
+    def test_auth_lab_login_userid_cookie(self):
+        obj = authLogin.objects.create(name="Jack", username="authcookie2",
+                                       password="pw")
+        r = self.client.post("/auth_lab/login",
+                             {"username": "authcookie2", "pass": "pw"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self._assert_hardened(r, "userid").value, str(obj.userid))
+
+        # The cookie-swap exercise (GET with someone else's userid) still works.
+        self.client.cookies["userid"] = str(obj.userid)
+        r = self.client.get("/auth_lab/login")
+        self.assertEqual(r.status_code, 200)
+        self._assert_hardened(r, "userid")
+
+    def test_crypto_failure_lab3_cookie(self):
+        r = self.client.post("/cryptographic_failure/lab3",
+                             {"username": "User", "password": "P@$$w0rd"})
+        self.assertEqual(r.status_code, 200)
+        # Still the plaintext "{username}|{expiry}" value the lab is about.
+        self.assertTrue(self._assert_hardened(r, "cookie").value.startswith("User|"))
+
+        r = self.client.post("/cryptographic_failure/lab3",
+                             {"username": "User", "password": "wrong"})
+        self._assert_hardened(r, "cookie")
+
+    def test_sec_misconfig_lab3_auth_cookie(self):
+        r = self.client.get("/sec_mis_lab3")
+        self.assertEqual(r.status_code, 200)
+        self._assert_hardened(r, "auth_cookie")
+
+    def test_auth_failure_lab3_session_cookie(self):
+        # Missing credentials: the view clears the cookie, with the attributes.
+        r = self.client.post("/auth_failure/lab3", {})
+        self.assertEqual(r.status_code, 200)
+        self._assert_hardened(r, "session_id")
+
+        password = "lab3-password"
+        users = {"User1": {"userid": "1", "username": "User1",
+                           "password": hashlib.sha256(password.encode()).hexdigest()}}
+        with mock.patch.dict("introduction.views.USER_A7_LAB3", users, clear=True):
+            r = self.client.post("/auth_failure/lab3",
+                                 {"username": "User1", "password": password})
+        self.assertEqual(r.status_code, 200)
+        morsel = self._assert_hardened(r, "session_id")
+        # The lab still issues the session token it stores server side.
+        self.assertTrue(AF_session_id.objects.filter(session_id=morsel.value).exists())
+
+    def test_csrf_lab_auth_cookie(self):
+        CSRF_user_tbl.objects.create(username="alfresko",
+                                     password=hash_password("pw"),
+                                     balance=100)
+        r = self.client.post("/mitre/9/lab/login",
+                             {"username": "alfresko", "password": "pw"})
+        self.assertEqual(r.status_code, 302)
+        self._assert_hardened(r, "auth_cookiee")
+
+    def test_documented_opt_out_only_drops_secure(self):
+        """PYGOAT_INSECURE_COOKIES is for plain-HTTP runs; it drops no other flag."""
+        with mock.patch.dict(os.environ, {"PYGOAT_INSECURE_COOKIES": "1"}):
+            r = self.client.get("/insec_des_lab")
+        morsel = r.cookies["token"]
+        self.assertFalse(morsel["secure"])
+        self.assertTrue(morsel["httponly"])
+        self.assertEqual(morsel["samesite"], "Lax")

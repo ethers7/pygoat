@@ -4,14 +4,15 @@ import shutil
 import tempfile
 from unittest import mock
 
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
 from .models import comments
 from .utility import (LAB_CODE_MAX_BYTES, BlogNotAllowed, LabCodeRejected,
                       UnsafeExpression, blog_path, customHash,
                       ensure_password_hash, hash_password, is_password_hash,
-                      lab_code_path, safe_arithmetic_eval, validate_fetch_url,
+                      lab_code_path, safe_arithmetic_eval,
+                      secure_cookies_enabled, validate_fetch_url,
                       validate_lab_code, verify_password, write_lab_code)
 
 
@@ -74,6 +75,36 @@ class SafeArithmeticEvalTests(SimpleTestCase):
             safe_arithmetic_eval("*".join(["999**99"] * 15))
         # Big-but-usable answers keep working, and stay printable.
         self.assertEqual(len(str(safe_arithmetic_eval("999 ** 99"))), 297)
+
+
+class SecureCookiesEnabledTests(SimpleTestCase):
+    """Lab cookies are Secure by default; opting out has to be explicit."""
+
+    def _with_env(self, value):
+        with mock.patch.dict(os.environ, {"PYGOAT_INSECURE_COOKIES": value}):
+            return secure_cookies_enabled()
+
+    def test_secure_by_default(self):
+        environ = dict(os.environ)
+        environ.pop("PYGOAT_INSECURE_COOKIES", None)
+        with mock.patch.dict(os.environ, environ, clear=True):
+            self.assertTrue(secure_cookies_enabled())
+
+    def test_documented_values_opt_out(self):
+        for value in ("1", "true", "TRUE", "Yes", "on", " on "):
+            self.assertFalse(self._with_env(value), msg=value)
+
+    def test_anything_else_keeps_the_secure_default(self):
+        for value in ("", "   ", "0", "false", "no", "off", "maybe", "secure"):
+            self.assertTrue(self._with_env(value), msg=value)
+
+    @override_settings(SESSION_COOKIE_SECURE=True)
+    def test_https_only_settings_cannot_be_downgraded_by_the_opt_out(self):
+        self.assertTrue(self._with_env("1"))
+
+    @override_settings(SECURE_SSL_REDIRECT=True)
+    def test_ssl_redirect_settings_cannot_be_downgraded_by_the_opt_out(self):
+        self.assertTrue(self._with_env("1"))
 
 
 class ValidateFetchUrlTests(SimpleTestCase):

@@ -27,15 +27,32 @@
   <ul>
     <li>User django's builtin csrf_token </li>
     <li>For other framework look for similar method</li>
+    <li>Mark the session cookie <code>SameSite=Lax</code> (or <code>Strict</code>): the browser
+      then refuses to attach it to cross-site requests, so a forged request arrives
+      unauthenticated</li>
   </ul>
-  <button class="coll btn btn-info">Lab 1 Details</button> 
+  <button class="coll btn btn-info">Lab 1 Details</button>
   <div class="lab">
-    <br> 
+    <br>
     This lab contains a very baddly designed bank application<br>
     can you attack user : `Alfresko` ( you need to login as Alfresko (Alfresco) for completeting the attack process )
     <br><br>
     Username : susUser2878 <br>
     password : SUsUserpAsswOrd<br>
+    <br>
+    <b>Note on <code>SameSite</code>:</b> the lab's <code>auth_cookiee</code> is now set with
+    <code>HttpOnly</code>, <code>Secure</code> and <code>SameSite=Lax</code>, so the browser no
+    longer sends it with a cross-site <em>subresource</em> request - an
+    <code>&lt;img src="...transfer..."&gt;</code>, an <code>iframe</code>, a <code>fetch()</code>
+    or an auto-submitted cross-site form gets a logged-out response, and that transfer never
+    happens. <code>Lax</code> still allows a cross-site <b>top-level GET navigation</b>, and the
+    transfer of this badly designed bank <em>is</em> a GET
+    (<code>/mitre/9/lab/api/&lt;recipient&gt;/&lt;amount&gt;</code>), so the attack still works if
+    your payload makes the victim's browser navigate to it (a link they click, a
+    <code>window.location</code> / <code>meta refresh</code> on your page). That is the lesson:
+    <code>SameSite=Lax</code> kills the silent, invisible variants, but only a state-changing
+    request behind <code>POST</code> + a verified CSRF token (or <code>SameSite=Strict</code>) is
+    actually safe.<br>
     <div align="right">
       <button class="btn btn-info" type="button" onclick="window.location.href='/mitre/9/lab/login'">Access Lab</button>
     </div>

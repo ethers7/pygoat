@@ -10,8 +10,8 @@ from django.shortcuts import redirect, render
 from pygoat.settings import CSRF_LAB_JWT_KEY
 
 from .models import CSRF_user_tbl
-from .utility import (UnsafeExpression, safe_arithmetic_eval, validate_host,
-                      verify_password)
+from .utility import (UnsafeExpression, safe_arithmetic_eval,
+                      secure_cookies_enabled, validate_host, verify_password)
 from .views import authentication_decorator
 
 # import os
@@ -173,7 +173,16 @@ def csrf_lab_login(request):
             }
             cookie = jwt.encode(payload, CSRF_LAB_JWT_KEY, algorithm='HS256')
             response = redirect("/mitre/9/lab/transaction")
-            response.set_cookie('auth_cookiee', cookie)
+            # The auth JWT of the CSRF lab. HttpOnly keeps it out of
+            # document.cookie, Secure keeps it off plaintext HTTP, and
+            # SameSite=Lax means a cross-site *subresource* (the <img>/<iframe>
+            # /fetch/auto-POST payload of a CSRF page) no longer carries it -
+            # which is exactly the point of the lesson. A cross-site top-level
+            # GET navigation still sends it, so the transfer endpoint can still
+            # be forged that way: see the lab notes on mitre_top9.html.
+            response.set_cookie('auth_cookiee', cookie,
+                                httponly=True, samesite='Lax',
+                                secure=secure_cookies_enabled())
             return response
         else :
             return redirect('/mitre/9/lab/login')

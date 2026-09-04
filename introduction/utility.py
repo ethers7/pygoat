@@ -10,10 +10,48 @@ import tempfile
 import uuid
 from urllib.parse import urlsplit, urlunsplit
 
+from django.conf import settings
 from django.contrib.auth.hashers import (check_password, identify_hasher,
                                          make_password)
 
 from .models import *
+
+# ---------------------------------------------------------------------------
+# Cookies the lessons set themselves (CWE-614 / CWE-1004).
+#
+# The cookies that carry authentication or session state - a JWT, a session id,
+# the `userid` the broken-auth lab treats as an identity - are all set with
+#   * httponly=True  - out of reach of document.cookie, so an XSS payload
+#                      elsewhere in the app cannot read a session out of the
+#                      browser (the labs are solved with developer tools or an
+#                      intercepting proxy, which still see and edit them),
+#   * samesite='Lax' - not attached to cross-site subresource requests, which
+#                      is what a CSRF payload uses,
+#   * secure=secure_cookies_enabled() - never sent over plaintext HTTP.
+#
+# Secure is the default and opting out has to be explicit. Browsers only return
+# a Secure cookie over HTTPS, and this app is also served over plain HTTP
+# (`manage.py runserver` / the container on http://127.0.0.1:8000), so a
+# deliberately plaintext deployment sets PYGOAT_INSECURE_COOKIES=1 for the
+# cookie based labs to work - see README.md. A deployment that already declares
+# itself HTTPS-only in the Django settings (SESSION_COOKIE_SECURE or
+# SECURE_SSL_REDIRECT) keeps Secure cookies whatever that variable says, so the
+# opt-out can never downgrade an HTTPS deployment.
+# ---------------------------------------------------------------------------
+
+INSECURE_COOKIES_ENV = 'PYGOAT_INSECURE_COOKIES'
+
+_INSECURE_COOKIES_OPT_OUT = ('1', 'true', 'yes', 'on')
+
+
+def secure_cookies_enabled():
+    """Return True unless the operator explicitly opts out of Secure cookies."""
+    if (getattr(settings, 'SESSION_COOKIE_SECURE', False)
+            or getattr(settings, 'SECURE_SSL_REDIRECT', False)):
+        return True
+    opt_out = os.environ.get(INSECURE_COOKIES_ENV, '')
+    return opt_out.strip().lower() not in _INSECURE_COOKIES_OPT_OUT
+
 
 # Allowlist for host arguments handed to lookup/scan commands (dig, nslookup,
 # nmap). Only DNS label characters and IP notation are accepted, so no shell

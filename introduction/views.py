@@ -32,8 +32,8 @@ from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
 from .utility import (BlogNotAllowed, UnsafeExpression, blog_path, customHash,
-                      safe_arithmetic_eval, validate_fetch_url, validate_host,
-                      verify_password)
+                      safe_arithmetic_eval, secure_cookies_enabled,
+                      validate_fetch_url, validate_host, verify_password)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -211,7 +211,13 @@ def insec_des_lab(request):
         token = request.COOKIES.get('token')
         if token == None:
             token = encoded_user
-            response.set_cookie(key='token',value=token.decode('utf-8'))
+            # The token cookie carries this session's authorisation state, so
+            # it is not readable from JavaScript, is not sent on cross-site
+            # subresource requests and stays off plaintext HTTP. Tampering with
+            # it (the exercise) is done with developer tools or a proxy.
+            response.set_cookie(key='token', value=token.decode('utf-8'),
+                                httponly=True, samesite='Lax',
+                                secure=secure_cookies_enabled())
         else:
             # Untrusted cookie: decode and parse as JSON only, and fail closed
             # (non-admin) on any malformed or unexpected payload.
@@ -284,6 +290,14 @@ def xxe_parse(request):
 
     return render(request, 'Lab/XXE/xxe_lab.html')
 
+# The `userid` cookie is the whole identity of the broken-auth lab, so it is no
+# longer kept for a year (max_age=31449600): an hour is long enough to work
+# through the exercise and bounds how long a leaked or guessed value stays
+# usable. It is also set HttpOnly / SameSite=Lax / Secure like every other
+# session cookie of this app - see secure_cookies_enabled() in utility.py.
+AUTH_LAB_COOKIE_MAX_AGE = 60 * 60
+
+
 def auth_home(request):
     return render(request,'Lab/AUTH/auth_home.html')
 
@@ -314,7 +328,10 @@ def auth_lab_signup(request):
                         'name': obj.name,
                         'err_msg': 'Cookie Set'
                     })
-                response.set_cookie('userid', obj.userid, max_age=31449600, samesite=None, secure=False)
+                response.set_cookie('userid', obj.userid,
+                                    max_age=AUTH_LAB_COOKIE_MAX_AGE,
+                                    httponly=True, samesite='Lax',
+                                    secure=secure_cookies_enabled())
                 print('Setting cookie successful')
                 return response
             except:
@@ -337,7 +354,10 @@ def auth_lab_login(request):
                     'name': obj.name,
                     'err_msg': 'Login Successful'
                 })
-            response.set_cookie('userid', obj.userid, max_age=31449600, samesite=None, secure=False)
+            response.set_cookie('userid', obj.userid,
+                                max_age=AUTH_LAB_COOKIE_MAX_AGE,
+                                httponly=True, samesite='Lax',
+                                secure=secure_cookies_enabled())
             print('Login successful')
             return response
         except:
@@ -359,7 +379,10 @@ def auth_lab_login(request):
                         'name': obj.name,
                         'err_msg': 'Login Successful'
                     })
-                response.set_cookie('userid', obj.userid, max_age=31449600, samesite=None, secure=False)
+                response.set_cookie('userid', obj.userid,
+                                    max_age=AUTH_LAB_COOKIE_MAX_AGE,
+                                    httponly=True, samesite='Lax',
+                                    secure=secure_cookies_enabled())
                 print('Login successful')
                 return response
             except:
@@ -1165,12 +1188,21 @@ def crypto_failure_lab3(request):
                     expire = datetime.datetime.now() + datetime.timedelta(minutes=60)
                     cookie = f"{username}|{expire}"
                     response = render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab3.html",{"success":True, "failure":False , "admin":False})
-                    response.set_cookie("cookie", cookie)
+                    # The session state of this lab travels in this cookie, so
+                    # it is not exposed to document.cookie, is not sent on
+                    # cross-site subresource requests and stays off plaintext
+                    # HTTP. Reading/rewriting it (the exercise) is done with
+                    # developer tools or an intercepting proxy.
+                    response.set_cookie("cookie", cookie,
+                                        httponly=True, samesite='Lax',
+                                        secure=secure_cookies_enabled())
                     response.status_code = 200
                     return response
                 else:
                     response = render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab3.html",{"success":False, "failure":True})
-                    response.set_cookie("cookie", None)
+                    response.set_cookie("cookie", None,
+                                        httponly=True, samesite='Lax',
+                                        secure=secure_cookies_enabled())
                     return response
             except:
                 return render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab2.html",{"success":False, "failure":True})
@@ -1198,7 +1230,11 @@ def sec_misconfig_lab3(request):
 
         cookie = jwt.encode(payload, SECRET_COOKIE_KEY, algorithm='HS256')
         response = render(request,"Lab/sec_mis/sec_mis_lab3.html", {"admin":False} )
-        response.set_cookie(key = "auth_cookie", value = cookie)
+        # The auth JWT of this lab: kept out of document.cookie, off cross-site
+        # subresource requests and off plaintext HTTP.
+        response.set_cookie(key="auth_cookie", value=cookie,
+                            httponly=True, samesite='Lax',
+                            secure=secure_cookies_enabled())
         return response
 
 # - ------------------------Identification and Authentication Failures--------------------------------
@@ -1285,14 +1321,22 @@ def auth_failure_lab3(request):
             password = hashlib.sha256(password.encode()).hexdigest()
         except:
             response = render(request, "Lab_2021/A7_auth_failure/lab3.html")
-            response.set_cookie("session_id", None)
+            # The session id of this lab: kept out of document.cookie, off
+            # cross-site subresource requests and off plaintext HTTP. The
+            # session token itself is still guessable - that is the exercise -
+            # and developer tools or a proxy still show and edit the cookie.
+            response.set_cookie("session_id", None,
+                                httponly=True, samesite='Lax',
+                                secure=secure_cookies_enabled())
             return response
 
         if USER_A7_LAB3[username]['password'] == password:
             session_data = AF_session_id.objects.create(session_id=token, user=USER_A7_LAB3[username]['username'])
             session_data.save()
             response = render(request, "Lab_2021/A7_auth_failure/lab3.html", {"success":True, "failure":False, "username":username})
-            response.set_cookie("session_id", token)
+            response.set_cookie("session_id", token,
+                                httponly=True, samesite='Lax',
+                                secure=secure_cookies_enabled())
             return response
 
 #-- coding playground for lab2
