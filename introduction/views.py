@@ -10,7 +10,6 @@ import string
 import subprocess
 import uuid
 from dataclasses import asdict, dataclass
-from hashlib import md5
 from io import BytesIO
 from random import randint
 
@@ -36,7 +35,8 @@ from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
 from .utility import (UnsafeExpression, customHash, filter_blog,
-                      safe_arithmetic_eval, validate_fetch_url, validate_host)
+                      safe_arithmetic_eval, validate_fetch_url, validate_host,
+                      verify_password)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -1059,8 +1059,15 @@ def crypto_failure_lab(request):
             username = request.POST["username"]
             password = request.POST["password"]
             try:
-                password = md5(password.encode()).hexdigest()
-                user = CF_user.objects.filter(username=username,password=password).first()
+                # Passwords are stored with Django's password hashers (salted
+                # PBKDF2) instead of an unsalted MD5 digest, so the row is
+                # looked up by username and the password is then verified in
+                # constant time. Fails closed on an unknown user or a stored
+                # value that is not a supported hash.
+                user = CF_user.objects.filter(username=username).first()
+                if user is None or not verify_password(password, user.password):
+                    return render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab.html",
+                                  {"success":False, "failure":True})
                 return render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab.html",{"user":user, "success":True,"failure":False})
             except Exception as e:
                 return render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab.html",{"success":False, "failure":True})

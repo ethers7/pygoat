@@ -2,7 +2,6 @@ import datetime
 import re
 import shlex
 import subprocess
-from hashlib import md5
 
 import jwt
 from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
@@ -12,7 +11,8 @@ from django.views.decorators.csrf import csrf_exempt
 from pygoat.settings import CSRF_LAB_JWT_KEY
 
 from .models import CSRF_user_tbl
-from .utility import UnsafeExpression, safe_arithmetic_eval, validate_host
+from .utility import (UnsafeExpression, safe_arithmetic_eval, validate_host,
+                      verify_password)
 from .views import authentication_decorator
 
 # import os
@@ -162,9 +162,11 @@ def csrf_lab_login(request):
     elif request.method == 'POST':
         password = request.POST.get('password')
         username = request.POST.get('username')
-        password = md5(password.encode()).hexdigest()
-        User = CSRF_user_tbl.objects.filter(username=username, password=password)
-        if User:
+        # Lab passwords are stored as salted PBKDF2 hashes (Django's password
+        # hashers), not as unsalted MD5 digests: look the account up by name,
+        # then verify the password in constant time. Fails closed.
+        User = CSRF_user_tbl.objects.filter(username=username)
+        if User and verify_password(password, User[0].password):
             payload ={
                 'username': username,
                 'exp': datetime.datetime.utcnow() + datetime.timedelta(seconds=300),

@@ -8,6 +8,9 @@ import socket
 import uuid
 from urllib.parse import urlsplit, urlunsplit
 
+from django.contrib.auth.hashers import (check_password, identify_hasher,
+                                         make_password)
+
 from .models import *
 
 # Allowlist for host arguments handed to lookup/scan commands (dig, nslookup,
@@ -236,3 +239,64 @@ def filter_blog(code):
 
 def customHash(password):
     return hashlib.sha256(password.encode()).hexdigest()[::-1]
+
+
+# Password storage for the lab user tables (CF_user, CSRF_user_tbl). A bare
+# fast digest (MD5/SHA1/SHA256) is not a password hash: it is unsalted and
+# cheap, so a stolen table can be cracked with a wordlist or a rainbow table.
+# These helpers delegate to Django's configured password hashers (PBKDF2-SHA256
+# by default), which salt every password and apply a work factor, and compare
+# in constant time.
+
+# Legacy algorithms that must never be used to verify a password, even if a
+# deployment re-enables them in PASSWORD_HASHERS.
+_WEAK_PASSWORD_ALGORITHMS = frozenset(('md5', 'unsalted_md5', 'sha1',
+                                       'unsalted_sha1', 'crypt'))
+
+
+def hash_password(password):
+    """Return a salted, iterated hash for *password* (never plaintext)."""
+    return make_password(password)
+
+
+def is_password_hash(value):
+    """True when *value* is an encoded hash from a strong Django hasher.
+
+    Bare digests (a 32 char MD5 or 64 char SHA256 hex string) and the legacy
+    unsalted/crypt encodings are rejected: they are not password hashes, so a
+    cracked database dump must never be replayed as a stored credential.
+    """
+    if not isinstance(value, str) or '$' not in value:
+        return False
+    try:
+        hasher = identify_hasher(value)
+    except ValueError:
+        return False
+    return hasher.algorithm not in _WEAK_PASSWORD_ALGORITHMS
+
+
+def ensure_password_hash(value):
+    """Hash *value* unless it already is a Django password hash.
+
+    Used on write paths (e.g. the admin site) so a password typed in the clear
+    is stored hashed and an already hashed value is not double hashed.
+    """
+    if not isinstance(value, str) or not value:
+        return value
+    if is_password_hash(value):
+        return value
+    return hash_password(value)
+
+
+def verify_password(password, stored_hash):
+    """Constant-time check of *password* against a stored password hash.
+
+    Returns False for a missing password and for a stored value that is not a
+    supported hash (e.g. a legacy MD5 row): such credentials must be re-set
+    with hash_password(), they are never accepted as-is.
+    """
+    if not isinstance(password, str) or not password:
+        return False
+    if not is_password_hash(stored_hash):
+        return False
+    return check_password(password, stored_hash)

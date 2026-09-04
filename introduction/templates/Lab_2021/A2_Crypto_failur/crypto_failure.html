@@ -22,6 +22,12 @@
           admin,c93ccd78b2076528346216b3b2f701e6</br>
           rupak,5ee3547adb4481902349bdd0f2ffba93</br>
         </code>
+        <br>
+        These MD5 digests are what the old, broken storage leaked: they are unsalted and fast, so a wordlist
+        or a rainbow table recovers the plaintext in seconds. Crack the admin digest and log in with the
+        password you recovered. The application itself no longer hashes with MD5 &mdash; it stores and verifies
+        credentials with a salted, iterated password hash (PBKDF2 via Django's password hashers), which is why
+        a fresh dump of this table could not be cracked the same way.
 
         <br>
         <div align="right"> <button class="btn btn-info" type="button" onclick="window.location.href='/cryptographic_failure/lab'">Access

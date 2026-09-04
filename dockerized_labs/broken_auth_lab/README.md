@@ -8,7 +8,9 @@ This is a deliberately vulnerable web application that demonstrates common authe
 2. Plain Text Password Storage
 3. Insecure Session Management
 4. Vulnerable "Remember Me" Functionality
-5. Predictable Password Reset Tokens
+5. Password Reset Token Handling (token generation is now fixed: reset tokens come from a
+   cryptographically secure random generator instead of an MD5 digest of email + timestamp;
+   the remaining reset weaknesses - no expiry, token shown in the UI - are still exercises)
 6. No Brute Force Protection
 7. Debug Mode Enabled in Production
 
@@ -54,8 +56,9 @@ The lab comes with two pre-configured users:
 
 3. **Password Reset Exploitation**
    - Request a password reset
-   - Analyze the reset token generation
-   - Try to predict or manipulate reset tokens
+   - Analyze the reset token generation: it now uses `secrets.token_urlsafe(32)` (CSPRNG),
+     so predicting it is no longer feasible - contrast that with the old MD5(email + timestamp) token
+   - The token still never expires and is shown in the UI: exploit those instead
 
 4. **Role Escalation**
    - Login as a regular user

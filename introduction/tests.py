@@ -1,3 +1,4 @@
+import hashlib
 import os
 from unittest import mock
 
@@ -5,7 +6,9 @@ from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
 from .models import comments
-from .utility import UnsafeExpression, safe_arithmetic_eval, validate_fetch_url
+from .utility import (UnsafeExpression, customHash, ensure_password_hash,
+                      hash_password, is_password_hash, safe_arithmetic_eval,
+                      validate_fetch_url, verify_password)
 
 
 class SafeArithmeticEvalTests(SimpleTestCase):
@@ -82,6 +85,52 @@ class ValidateFetchUrlTests(SimpleTestCase):
 
     def test_credential_trick_pointing_at_metadata_is_rejected(self):
         self.assertIsNone(validate_fetch_url("http://example.com@169.254.169.254/"))
+
+
+class LabPasswordHashingTests(SimpleTestCase):
+    """Lab credentials must be stored with a salted KDF, never a fast digest."""
+
+    PASSWORD = "P@$$w0rd"
+
+    def test_hash_password_is_salted_and_not_a_bare_digest(self):
+        first = hash_password(self.PASSWORD)
+        second = hash_password(self.PASSWORD)
+        self.assertNotEqual(first, self.PASSWORD)
+        self.assertNotEqual(first, second)          # random per-password salt
+        self.assertTrue(first.startswith("pbkdf2_sha256$"))
+        self.assertNotIn(hashlib.md5(self.PASSWORD.encode()).hexdigest(), first)
+        self.assertNotIn(hashlib.sha256(self.PASSWORD.encode()).hexdigest(), first)
+
+    def test_verify_password_accepts_the_right_password_only(self):
+        stored = hash_password(self.PASSWORD)
+        self.assertTrue(verify_password(self.PASSWORD, stored))
+        self.assertFalse(verify_password("wrong", stored))
+        self.assertFalse(verify_password("", stored))
+        self.assertFalse(verify_password(None, stored))
+
+    def test_verify_password_rejects_legacy_and_cracked_digests(self):
+        """A dumped MD5/SHA256 digest is not a credential and never verifies."""
+        md5_digest = hashlib.md5(self.PASSWORD.encode()).hexdigest()
+        sha1_digest = hashlib.sha1(self.PASSWORD.encode()).hexdigest()
+        for stored in (md5_digest,
+                       sha1_digest,
+                       "md5$$" + md5_digest,
+                       "sha1$$" + sha1_digest,
+                       customHash(self.PASSWORD),
+                       self.PASSWORD,
+                       "",
+                       None):
+            self.assertFalse(is_password_hash(stored), msg=repr(stored))
+            self.assertFalse(verify_password(self.PASSWORD, stored), msg=repr(stored))
+            self.assertFalse(verify_password(md5_digest, stored), msg=repr(stored))
+
+    def test_ensure_password_hash_hashes_plaintext_once(self):
+        hashed = ensure_password_hash(self.PASSWORD)
+        self.assertTrue(is_password_hash(hashed))
+        self.assertTrue(verify_password(self.PASSWORD, hashed))
+        self.assertEqual(ensure_password_hash(hashed), hashed)   # never double hashed
+        self.assertEqual(ensure_password_hash(""), "")
+        self.assertIsNone(ensure_password_hash(None))
 
 
 class XxeParseTests(TestCase):

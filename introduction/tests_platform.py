@@ -8,11 +8,15 @@ DEBUG=False, so {% static %} blows up without collectstatic (and collectstatic
 fails upstream on a missing font). Gunicorn smoke uses DEBUG=True. Tests force
 plain StaticFilesStorage so we gate routes/auth, not WhiteNoise manifests.
 """
+import hashlib
 from unittest import mock
 
 from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
 from django.urls import reverse
+
+from .models import CF_user, CSRF_user_tbl
+from .utility import hash_password
 
 
 @override_settings(
@@ -142,3 +146,93 @@ class PlatformRegressionTests(TestCase):
         )
         self.assertEqual(r.status_code, 302)
         self.assertEqual(self.client.get("/").status_code, 200)
+
+    def test_crypto_failure_lab_login_uses_a_salted_password_hash(self):
+        """Lab 1 still logs the seeded demo account in, without MD5 storage."""
+        lab_password = "p@ssword"
+        CF_user.objects.create(
+            username="admin",
+            password=hash_password(lab_password),
+            password2="",
+        )
+        self.client.force_login(self.user)
+        r = self.client.post(reverse("cryptographic_failure_lab"),
+                             {"username": "admin", "password": lab_password})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Successfully logged in as admin")
+
+    def test_crypto_failure_lab_login_rejects_wrong_password_and_md5_digest(self):
+        lab_password = "p@ssword"
+        CF_user.objects.create(
+            username="admin",
+            password=hash_password(lab_password),
+            password2="",
+        )
+        self.client.force_login(self.user)
+        for password in ("not-the-password",
+                         hashlib.md5(lab_password.encode()).hexdigest()):
+            r = self.client.post(reverse("cryptographic_failure_lab"),
+                                 {"username": "admin", "password": password})
+            self.assertEqual(r.status_code, 200, msg=password)
+            self.assertContains(r, "Login Failed", msg_prefix=password)
+
+    def test_crypto_failure_lab_login_fails_closed_on_a_legacy_md5_row(self):
+        """A row still holding a bare MD5 digest is not a usable credential."""
+        lab_password = "p@ssword"
+        CF_user.objects.create(
+            username="legacy",
+            password=hashlib.md5(lab_password.encode()).hexdigest(),
+            password2="",
+        )
+        self.client.force_login(self.user)
+        r = self.client.post(reverse("cryptographic_failure_lab"),
+                             {"username": "legacy", "password": lab_password})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Login Failed")
+
+    def test_csrf_lab_login_verifies_the_stored_password_hash(self):
+        """CSRF lab login still works for a hashed account and fails closed."""
+        lab_password = "csrf-lab-pass"
+        CSRF_user_tbl.objects.create(
+            username="jack",
+            password=hash_password(lab_password),
+            balance=1000,
+        )
+        self.client.force_login(self.user)
+        r = self.client.post("/mitre/9/lab/login",
+                             {"username": "jack", "password": lab_password})
+        self.assertEqual(r.status_code, 302)
+        self.assertIn("/mitre/9/lab/transaction", r["Location"])
+        self.assertIn("auth_cookiee", r.cookies)
+
+        for username, password in (("jack", "wrong"),
+                                   ("jack", hashlib.md5(lab_password.encode()).hexdigest()),
+                                   ("nobody", lab_password)):
+            r = self.client.post("/mitre/9/lab/login",
+                                 {"username": username, "password": password})
+            self.assertEqual(r.status_code, 302, msg=username)
+            self.assertIn("/mitre/9/lab/login", r["Location"])
+
+    def test_lab_user_admin_stores_typed_passwords_hashed(self):
+        """The seeding path (admin site) never writes a plaintext password."""
+        from django.contrib import admin as django_admin
+
+        from .admin import LabUserAdmin
+
+        model_admin = LabUserAdmin(CF_user, django_admin.site)
+        obj = CF_user(username="seeded", password="p@ssword", password2="")
+        model_admin.save_model(request=None, obj=obj, form=None, change=False)
+
+        stored = CF_user.objects.get(username="seeded").password
+        self.assertNotEqual(stored, "p@ssword")
+        self.assertTrue(stored.startswith("pbkdf2_sha256$"))
+
+        # Re-saving an already hashed value must not hash it twice.
+        obj.password = stored
+        model_admin.save_model(request=None, obj=obj, form=None, change=True)
+        self.assertEqual(CF_user.objects.get(username="seeded").password, stored)
+
+        self.client.force_login(self.user)
+        r = self.client.post(reverse("cryptographic_failure_lab"),
+                             {"username": "seeded", "password": "p@ssword"})
+        self.assertContains(r, "Successfully logged in as seeded")

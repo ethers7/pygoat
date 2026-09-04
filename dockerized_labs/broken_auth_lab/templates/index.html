@@ -89,11 +89,16 @@
                 <p class="bp">
                     Discover common password reset vulnerabilities:
                     <ul>
-                        <li>Weak token generation</li>
-                        <li>Predictable reset tokens</li>
+                        <li>Weak token generation &mdash; <b>mitigated:</b> the reset token is no longer an MD5 digest of
+                            the email plus a timestamp (CWE-327 / CWE-330). It is now generated with a cryptographically
+                            secure random generator (<code>secrets.token_urlsafe</code>), so it cannot be predicted.</li>
                         <li>No token expiration</li>
                         <li>Token exposure in UI</li>
                     </ul>
+                    Exercise: the old token was <code>md5(email + ":" + timestamp)</code>. Recompute that digest for
+                    a guessed timestamp to see why hashing predictable data never produces a secret, then confirm the
+                    current CSPRNG token cannot be reproduced that way. The reset flow is still exploitable through
+                    the two weaknesses above.
                 </p>
             </div>
 
