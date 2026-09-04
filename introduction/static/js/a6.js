@@ -1,6 +1,8 @@
 event5 = function(){
     var code = document.getElementById('a6_t1').value
     var myHeaders = new Headers();
+    // The endpoint is CSRF protected, so send this user's token (js/csrf.js).
+    myHeaders.append("X-CSRFToken", getCsrfToken());
     var formdata = new FormData();
 
     formdata.append("code", code);
@@ -24,6 +26,8 @@ event5 = function(){
 event6 = function(){
     var code = document.getElementById('a6_t1').value
     var myHeaders = new Headers();
+    // The endpoint is CSRF protected, so send this user's token (js/csrf.js).
+    myHeaders.append("X-CSRFToken", getCsrfToken());
     var formdata = new FormData();
 
     formdata.append("code", code);

@@ -4,9 +4,10 @@ event4 = function(){
     // Do not hard-code session tokens (csrftoken / jwt) here. "Cookie" is a
     // forbidden header for fetch(), so the browser sends the current user's
     // cookies itself for this same-origin request below.
+    // The endpoint is CSRF protected, so send this user's token (js/csrf.js).
+    myHeaders.append("X-CSRFToken", getCsrfToken());
 
     var formdata = new FormData();
-    // formdata.append("csrfmiddlewaretoken", "5fVOTXh2HNahtvJFJNRSrKkwPAgPM9YCHlrCGprAxhAAKOUWMxqMnWm8BUomv0Yd");
     formdata.append("code", code);
 
     var requestOptions = {

@@ -35,6 +35,9 @@ function SendToServer(){
         var url = $("#Url").attr("data-url");
        xhr.open("POST", url, true);
        xhr.setRequestHeader("Content-Type", "text/xml");
+       // xxe_parse is CSRF protected: send the token in the header Django reads
+       // (see js/csrf.js), since the XML body has no form field to carry it.
+       xhr.setRequestHeader("X-CSRFToken", getCsrfToken());
        xhr.send(xml);
 
 }

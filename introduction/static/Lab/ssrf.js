@@ -64,7 +64,10 @@ function checkcode(){
     formdata.append('html_code', html_code);
     var requestOptions = {
         method: 'POST',
+        // The endpoint is CSRF protected, so send this user's token (js/csrf.js).
+        headers: {'X-CSRFToken': getCsrfToken()},
         body: formdata,
+        credentials: 'same-origin',
         redirect: 'follow'
       };
       

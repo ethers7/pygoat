@@ -21,6 +21,8 @@
             var input = document.getElementById("input").value;
             var output = document.getElementById("output");
             var headers = new Headers();
+            // The api is CSRF protected, so send this user's token (js/csrf.js).
+            headers.append("X-CSRFToken", getCsrfToken());
             var formdata = new FormData();
             formdata.append("expression", input);
             var requestOption = {

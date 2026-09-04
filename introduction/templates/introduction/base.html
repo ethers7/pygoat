@@ -37,6 +37,7 @@
       integrity="sha384-6OIrr52G08NpOFSZdxxz1xdNSndlD4vdcf/q2myIUVO0VsqaGHJsB0RaBE01VTOY"
       crossorigin="anonymous"
     ></script>
+    <script src="{% static 'js/csrf.js' %}"> </script>
     <script defer src="{% static 'Lab/xss.js' %}"> </script>
     <script defer src="{% static 'Lab/ssrf.js' %}"> </script>
   </head>
@@ -678,6 +679,11 @@
             </div>
           </div>
         </nav>
+
+        <!-- Rendering the token makes Django set the csrftoken cookie on every
+             page and gives the ajax/fetch callers (js/csrf.js) a value for the
+             X-CSRFToken header expected by CsrfViewMiddleware. -->
+        <input type="hidden" id="csrf-token" name="csrfmiddlewaretoken" value="{{ csrf_token }}">
 
         {% block content %} {% endblock %}
       </div>

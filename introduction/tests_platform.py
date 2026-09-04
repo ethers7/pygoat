@@ -12,7 +12,7 @@ import hashlib
 from unittest import mock
 
 from django.contrib.auth.models import User
-from django.test import TestCase, override_settings
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
 from .models import CF_user, CSRF_user_tbl
@@ -236,3 +236,76 @@ class PlatformRegressionTests(TestCase):
         r = self.client.post(reverse("cryptographic_failure_lab"),
                              {"username": "seeded", "password": "p@ssword"})
         self.assertContains(r, "Successfully logged in as seeded")
+
+
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+)
+class CsrfProtectionTests(TestCase):
+    """The lab views no longer opt out of CsrfViewMiddleware (CWE-352).
+
+    The default test client does not enforce CSRF, so these use a client with
+    enforce_csrf_checks=True: an unsafe request without a token must be
+    refused, and the browser flows (form field / X-CSRFToken header) must
+    still work.
+    """
+
+    PASSWORD = "Str0ng-Passw0rd!"
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="csrfuser",
+            email="csrfuser@example.com",
+            password=self.PASSWORD,
+        )
+        self.client = Client(enforce_csrf_checks=True)
+        self.client.force_login(self.user)
+
+    def _token(self, url):
+        """Load a page and return the token it handed the browser."""
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200, msg=url)
+        self.assertContains(response, 'name="csrfmiddlewaretoken"')
+        return self.client.cookies["csrftoken"].value
+
+    def test_post_without_a_token_is_refused(self):
+        for url, data in (("/cmd_lab", {"domain": "example.com", "os": "linux"}),
+                          ("/cmd_lab2", {"val": "7 * 7"}),
+                          ("/ba_lab", {"name": "admin", "pass": "admin"}),
+                          ("/broken_access_lab_1", {"name": "jack", "pass": "x"}),
+                          ("/broken_access_lab_2", {"name": "jack", "pass": "x"}),
+                          ("/injection_sql_lab", {"name": "admin", "pass": "x"}),
+                          ("/otp", {"otp": "123"})):
+            r = self.client.post(url, data)
+            self.assertEqual(r.status_code, 403, msg=url)
+
+    def test_lab_forms_ship_a_token_so_the_post_still_works(self):
+        token = self._token("/cmd_lab")
+        with mock.patch("introduction.views.subprocess.Popen") as popen:
+            popen.return_value.communicate.return_value = (b"1.2.3.4", b"")
+            r = self.client.post("/cmd_lab", {"domain": "example.com",
+                                              "os": "linux",
+                                              "csrfmiddlewaretoken": token})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "1.2.3.4")
+
+    def test_ajax_api_accepts_the_x_csrftoken_header(self):
+        r = self.client.post("/mitre/25/lab/api", {"expression": "1 + 1"})
+        self.assertEqual(r.status_code, 403)
+
+        token = self._token("/mitre/25/lab")
+        r = self.client.post("/mitre/25/lab/api", {"expression": "1 + 1"},
+                             HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["result"], 2)
+
+    def test_xxe_parse_accepts_the_x_csrftoken_header(self):
+        body = "<?xml version='1.0'?><comm><text>hello</text></comm>"
+        r = self.client.post(reverse("xxe_parse"), data=body, content_type="text/xml")
+        self.assertEqual(r.status_code, 403)
+
+        token = self._token("/xxe_lab")
+        r = self.client.post(reverse("xxe_parse"), data=body,
+                             content_type="text/xml", HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(r.status_code, 200)
