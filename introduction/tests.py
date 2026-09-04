@@ -8,11 +8,11 @@ from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
 from .models import comments
-from .utility import (LAB_CODE_MAX_BYTES, LabCodeRejected, UnsafeExpression,
-                      customHash, ensure_password_hash, hash_password,
-                      is_password_hash, lab_code_path, safe_arithmetic_eval,
-                      validate_fetch_url, validate_lab_code, verify_password,
-                      write_lab_code)
+from .utility import (LAB_CODE_MAX_BYTES, BlogNotAllowed, LabCodeRejected,
+                      UnsafeExpression, blog_path, customHash,
+                      ensure_password_hash, hash_password, is_password_hash,
+                      lab_code_path, safe_arithmetic_eval, validate_fetch_url,
+                      validate_lab_code, verify_password, write_lab_code)
 
 
 class SafeArithmeticEvalTests(SimpleTestCase):
@@ -157,6 +157,70 @@ class LabPasswordHashingTests(SimpleTestCase):
         self.assertEqual(ensure_password_hash(hashed), hashed)   # never double hashed
         self.assertEqual(ensure_password_hash(""), "")
         self.assertIsNone(ensure_password_hash(None))
+
+
+class LabBlogPathTests(SimpleTestCase):
+    """The SSRF/LFI lab may only ever open a blog file of that lab (CWE-22).
+
+    The blog name comes from a request. Joining it onto a server directory and
+    opening the result read any file the app user could: "../.env" walked out
+    of the blogs directory and os.path.join() dropped the base entirely for an
+    absolute name. Reading the lab's own blogs must keep working.
+    """
+
+    BLOGS = ("blog1.txt", "blog2.txt", "blog3.txt", "blog4.txt")
+    SUFFIX = os.path.join("templates", "Lab", "ssrf", "blogs")
+
+    def test_the_blogs_of_the_lab_still_resolve(self):
+        for name in self.BLOGS:
+            path = blog_path(name)
+            self.assertTrue(os.path.isfile(path), path)
+            self.assertEqual(os.path.dirname(path)[-len(self.SUFFIX):], self.SUFFIX)
+            self.assertEqual(os.path.basename(path), name)
+
+    def test_rejects_traversal_absolute_and_malformed_names(self):
+        for name in ("../.env", "../../.env", "../../pygoat/settings.py",
+                     "/etc/passwd", "/etc/shadow", "..\\.env", "C:\\secret.txt",
+                     "....//....//.env", "..%2f.env", "%2e%2e/.env",
+                     "blogs/blog1.txt", "./blog1.txt", "blog1.txt\x00.env",
+                     "blog1.txt ", " blog1.txt", "blog1.py", ".env", "-blog1.txt",
+                     "", "   ", None, 1, b"blog1.txt"):
+            with self.assertRaises(BlogNotAllowed, msg=repr(name)):
+                blog_path(name)
+
+    def test_rejects_a_well_formed_name_that_is_not_a_blog(self):
+        # secret.txt of this lab sits one directory above the blogs directory.
+        for name in ("secret.txt", "blog99.txt"):
+            with self.assertRaises(BlogNotAllowed, msg=name):
+                blog_path(name)
+
+    def test_rejects_a_symlink_that_leaves_the_blogs_directory(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        blogs = os.path.join(root, "blogs")
+        os.mkdir(blogs)
+        outside = os.path.join(root, "credentials.txt")
+        with open(outside, "w", encoding="utf-8") as handle:
+            handle.write("SECRET_KEY=not-a-real-key")
+        with open(os.path.join(blogs, "blog1.txt"), "w", encoding="utf-8") as handle:
+            handle.write("a blog")
+        os.symlink(outside, os.path.join(blogs, "blog9.txt"))
+        os.symlink(root, os.path.join(blogs, "up.txt"))
+        with mock.patch("introduction.utility._BLOG_ROOT", os.path.realpath(blogs)):
+            self.assertEqual(os.path.basename(blog_path("blog1.txt")), "blog1.txt")
+            # realpath() resolves the link before the containment check, so a
+            # link planted inside the blogs directory cannot point outside it.
+            for name in ("blog9.txt", "up.txt"):
+                with self.assertRaises(BlogNotAllowed, msg=name):
+                    blog_path(name)
+
+    def test_rejects_a_directory_and_only_returns_regular_files(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        os.mkdir(os.path.join(root, "notes.txt"))
+        with mock.patch("introduction.utility._BLOG_ROOT", os.path.realpath(root)):
+            with self.assertRaises(BlogNotAllowed):
+                blog_path("notes.txt")
 
 
 class LabCodeWriteTests(SimpleTestCase):

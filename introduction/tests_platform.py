@@ -463,6 +463,69 @@ class OutboundFetchBudgetTests(TestCase):
     DEBUG=True,
     STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
 )
+class SsrfLabBlogReadTests(TestCase):
+    """The blog reader of the SSRF lab serves blogs and nothing else (CWE-22).
+
+    The posted value used to be a path that was joined onto a server directory
+    and opened, so "../.env" (the old lab answer) or an absolute path read any
+    file the app user could. Reading the lab's blogs must still work, and a
+    traversal attempt must be refused with a 400 rather than a 500.
+    """
+
+    PASSWORD = "Str0ng-Passw0rd!"
+    BLOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "templates", "Lab", "ssrf", "blogs")
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="blogreader",
+            email="blogreader@example.com",
+            password=self.PASSWORD,
+        )
+        self.client.force_login(self.user)
+
+    def test_a_blog_of_the_lab_is_still_served(self):
+        r = self.client.post("/ssrf_lab", {"blog": "blog1.txt"})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "SSRF flaws occur whenever a web application")
+
+    def test_the_lab_page_only_offers_blog_names(self):
+        r = self.client.get("/ssrf_lab")
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, 'name="blog" value="blog1.txt"')
+        self.assertNotContains(r, 'value="templates/Lab/ssrf/blogs/blog1.txt"')
+
+    def test_traversal_absolute_and_unknown_names_are_refused(self):
+        for payload in ("../.env", "../../.env", "../../pygoat/settings.py",
+                        "../secret.txt", "/etc/passwd", "..%2f.env",
+                        "....//....//.env", "db.sqlite3", "secret.txt",
+                        "views.py", ""):
+            r = self.client.post("/ssrf_lab", {"blog": payload})
+            self.assertEqual(r.status_code, 400, payload)
+            self.assertContains(r, "Refused", status_code=400, msg_prefix=payload)
+            self.assertNotContains(r, "SECRET_KEY", status_code=400,
+                                   msg_prefix=payload)
+
+    def test_a_missing_blog_field_does_not_raise(self):
+        r = self.client.post("/ssrf_lab", {})
+        self.assertEqual(r.status_code, 400)
+
+    def test_the_lab_blogs_are_all_readable(self):
+        for name in sorted(os.listdir(self.BLOG_DIR)):
+            r = self.client.post("/ssrf_lab", {"blog": name})
+            self.assertEqual(r.status_code, 200, name)
+
+    def test_anonymous_user_is_redirected_to_login(self):
+        client = Client()
+        r = client.post("/ssrf_lab", {"blog": "blog1.txt"})
+        self.assertEqual(r.status_code, 302)
+        self.assertIn("/login", r["Location"])
+
+
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+)
 class SstiLabStorageTests(TestCase):
     """The SSTI lab stores posts as data instead of as template source.
 

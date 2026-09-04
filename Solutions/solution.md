@@ -345,8 +345,9 @@ This websites serves some vlog, user need to figuer it out how this process is g
 
 * open dev tool and inspect the buttons
 ![ssrf_pic1](./img/pic1.png)
-* Here we can see there is a hidden input tag which is taking file path of the blog as a parameter.
-* now, if the path is not filltered correctly we can put file path of any file and access that.We just have to change the value.
+* Here we can see there is a hidden input tag which names the blog to serve.
+* The classic bug is that this value used to be a *file path*: it was joined onto a server directory
+  and opened, so anything you typed there was read back to you (path traversal, CWE-22).
 * some example -- 
 
 ![url.py](./img/pic2.png)
@@ -355,10 +356,31 @@ This websites serves some vlog, user need to figuer it out how this process is g
 #### Now about our main Objective, finding the .env file
 * normaly .env file is used to store all important credentials and configurations
 * Usally this hidden file is saved a base directory
-* So , this an trial and error method of searching 
-* example : .env , ../.env, ../../.env
-* solution :  ( ../.env) 
+* So , this used to be a trial and error method of searching
+* example : `.env`, `../.env`, `../../.env` (the old answer was `../.env`)
 ![img4](./img/img4.png)
+
+#### What the lab does now (and why the attack is refused)
+The lab still serves the four blogs, but the hidden field carries a **blog name**
+(`blog1.txt`), not a path, and `blog_path()` in `introduction/utility.py` resolves it:
+
+* the name must match `\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\.txt\Z`, so a `/`, a `\`, a `..`
+  segment, a NUL byte or an absolute path never reaches the join;
+* the joined path is passed through `os.path.realpath()` - which also resolves symlinks -
+  and must still sit directly inside the resolved blogs directory;
+* the target must be a regular file;
+* anything else raises `BlogNotAllowed` and the view answers **400** with
+  "Refused: only the blogs of this lab can be read", instead of a file or a 500.
+
+So try the payloads above against the lab: `../.env`, `../../.env`,
+`../../pygoat/settings.py`, `/etc/passwd`, `....//....//.env`, a URL-encoded `..%2f.env`
+and a symlink planted in the blogs directory are all refused, and `blog2.txt` still works.
+Two details worth remembering when you fix this class of bug yourself:
+
+* `os.path.join(base, user_input)` **discards** `base` when `user_input` is absolute, so a
+  base directory is not a boundary on its own;
+* filtering the string `..` is not enough (encodings, `....//`, symlinks): resolve the path
+  first, then check where it landed.
 
 
 # Solutions to 2021 Challenges

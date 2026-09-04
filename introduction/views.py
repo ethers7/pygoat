@@ -32,8 +32,9 @@ from requests.structures import CaseInsensitiveDict
 from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
-from .utility import (UnsafeExpression, customHash, safe_arithmetic_eval,
-                      validate_fetch_url, validate_host, verify_password)
+from .utility import (BlogNotAllowed, UnsafeExpression, blog_path, customHash,
+                      safe_arithmetic_eval, validate_fetch_url, validate_host,
+                      verify_password)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -972,15 +973,27 @@ def ssrf_lab(request):
         if request.method=="GET":
             return render(request,"Lab/ssrf/ssrf_lab.html",{"blog":"Read Blog About SSRF"})
         else:
-            file=request.POST["blog"]
-            try :
-                dirname = os.path.dirname(__file__)
-                filename = os.path.join(dirname, file)
-                file = open(filename,"r")
-                data = file.read()
-                return render(request,"Lab/ssrf/ssrf_lab.html",{"blog":data})
-            except:
-                return render(request, "Lab/ssrf/ssrf_lab.html", {"blog": "No blog found"})
+            # Fail closed: blog_path() only ever resolves a bare blog file name
+            # inside the lab's blogs directory. Joining the posted value onto a
+            # server directory and opening the result served any file the app
+            # user could read ("../../.env", and os.path.join() even dropped the
+            # base for an absolute "/etc/passwd").
+            try:
+                filename = blog_path(request.POST.get("blog"))
+            except BlogNotAllowed:
+                return render(
+                    request,
+                    "Lab/ssrf/ssrf_lab.html",
+                    {"blog": "Refused: only the blogs of this lab can be read, "
+                             "and only from the blogs directory."},
+                    status=400)
+            try:
+                with open(filename, "r", encoding="utf-8") as blog_file:
+                    data = blog_file.read()
+            except (OSError, UnicodeDecodeError):
+                return render(request, "Lab/ssrf/ssrf_lab.html",
+                              {"blog": "No blog found"}, status=404)
+            return render(request, "Lab/ssrf/ssrf_lab.html", {"blog": data})
     else:
         return redirect('login')
 

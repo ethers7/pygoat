@@ -99,6 +99,55 @@ def validate_fetch_url(url):
     return urlunsplit((scheme, netloc, parts.path, parts.query, ''))
 
 
+# ---------------------------------------------------------------------------
+# The blog reader of the SSRF/LFI lab.
+#
+# The lab lets a request name the blog to display and used to join that name
+# onto a server directory and open the result, which made the view read any
+# file the app user could (CWE-22): '../../.env' or
+# '../../pygoat/settings.py' walks out of the blogs directory, and
+# os.path.join() throws the base away entirely when the second argument is
+# absolute ('/etc/passwd'), so the base directory was no boundary at all.
+#
+# A blog is now addressed by a bare file name inside one fixed directory:
+#   * the name must match _BLOG_NAME_RE, so a separator, a parent reference,
+#     a drive letter, a NUL byte or an absolute path never reaches the join;
+#   * the joined path is resolved with realpath (which also follows symlinks)
+#     and must still sit directly inside the resolved blogs directory, so a
+#     link planted in that directory cannot point the read outside of it
+#     either;
+#   * the target must be a regular file, so a directory or a device node is
+#     not opened.
+# Every rejection raises, so the caller fails closed instead of serving
+# whatever the join happened to produce.
+# ---------------------------------------------------------------------------
+
+_BLOG_ROOT = os.path.realpath(os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                                           'templates', 'Lab', 'ssrf', 'blogs'))
+
+_BLOG_NAME_RE = re.compile(r'\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\.txt\Z')
+
+
+class BlogNotAllowed(ValueError):
+    """Raised when a requested blog is not a file in the lab blogs directory."""
+
+
+def blog_path(name):
+    """Return the absolute path of lab blog *name*, or raise BlogNotAllowed.
+
+    *name* is untrusted request data and is treated as a bare file name: it
+    can only ever select one of the blog files shipped with the lab.
+    """
+    if not isinstance(name, str) or not _BLOG_NAME_RE.match(name):
+        raise BlogNotAllowed('a blog is named like "blog1.txt"')
+    path = os.path.realpath(os.path.join(_BLOG_ROOT, name))
+    if os.path.dirname(path) != _BLOG_ROOT:
+        raise BlogNotAllowed('blog is outside the blogs directory')
+    if not os.path.isfile(path):
+        raise BlogNotAllowed('no such blog')
+    return path
+
+
 # Safe evaluator for the calculator labs. The expression is parsed with `ast`
 # and the resulting tree is walked: only numeric literals and this fixed
 # allowlist of arithmetic operators are accepted. Name, Call, Attribute,

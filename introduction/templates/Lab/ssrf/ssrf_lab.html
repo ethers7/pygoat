@@ -12,22 +12,22 @@
     <div style="display:flex;flex-direction:row;align-items:center;margin:15px">
         <form method="post" action="/ssrf_lab">
             {% csrf_token %}
-            <input type="hidden" name="blog" value="templates/Lab/ssrf/blogs/blog1.txt">
+            <input type="hidden" name="blog" value="blog1.txt">
             <button type="submit" class="btn btn-info"> Blog1 </button>
         </form>
         <form method="post" action="/ssrf_lab">
             {% csrf_token %}
-            <input type="hidden" name="blog" value="templates/Lab/ssrf/blogs/blog2.txt">
+            <input type="hidden" name="blog" value="blog2.txt">
             <button type="submit" class="btn btn-info"> Blog2 </button>
         </form>
         <form method="post" action="/ssrf_lab">
             {% csrf_token %}
-            <input type="hidden" name="blog" value="templates/Lab/ssrf/blogs/blog3.txt">
+            <input type="hidden" name="blog" value="blog3.txt">
             <button type="submit" class="btn btn-info"> Blog3 </button>
         </form>
         <form method="post" action="/ssrf_lab">
             {% csrf_token %}
-            <input type="hidden" name="blog" value="templates/Lab/ssrf/blogs/blog4.txt">
+            <input type="hidden" name="blog" value="blog4.txt">
             <button type="submit" class="btn btn-info"> Blog4 </button>
         </form>
     </div>
@@ -38,28 +38,49 @@
 
 <button class="coll2 btn btn-info" style= "position : fixed ; right :330px; bottom : 7px">Hint</button>
 <div class="lab code">
-    Try to find a .env file
+    Inspect the buttons and edit the hidden "blog" field: try to walk out of the blogs directory
+    (<code>../../.env</code>, <code>../../pygoat/settings.py</code>) or to name a file outright
+    (<code>/etc/passwd</code>). The view resolves the name inside the blogs directory only, so every
+    one of those is refused with "Refused: only the blogs of this lab can be read" - compare that with
+    the vulnerable version in the discussion page, which happily returned the .env file.
 </div>
 
 <button class="coll2 btn btn-info" style= "position : fixed ; right :200px; bottom : 7px">View Code</button>
 
 <div class="lab code">
-   <code>   
+   <code>
+    # utility.py - the request only ever names a blog, never a path</br>
+    _BLOG_ROOT = os.path.realpath(os.path.join(os.path.dirname(os.path.realpath(__file__)),</br>
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;'templates', 'Lab', 'ssrf', 'blogs'))</br>
+    _BLOG_NAME_RE = re.compile(r'\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\.txt\Z')</br>
+    </br>
+    def blog_path(name):</br>
+&emsp;if not isinstance(name, str) or not _BLOG_NAME_RE.match(name):</br>
+&emsp;&emsp;raise BlogNotAllowed('a blog is named like "blog1.txt"')&emsp;# no separator, no .., no absolute path</br>
+&emsp;path = os.path.realpath(os.path.join(_BLOG_ROOT, name))&emsp;# resolves symlinks too</br>
+&emsp;if os.path.dirname(path) != _BLOG_ROOT:</br>
+&emsp;&emsp;raise BlogNotAllowed('blog is outside the blogs directory')</br>
+&emsp;if not os.path.isfile(path):</br>
+&emsp;&emsp;raise BlogNotAllowed('no such blog')</br>
+&emsp;return path</br>
+    </br>
+    # views.py</br>
     def ssrf_lab(request):</br>
 &emsp;if request.user.is_authenticated:</br>
 &emsp;&emsp;if request.method=="GET":</br>
 &emsp;&emsp;&emsp;return render(request,"Lab/ssrf/ssrf_lab.html",{"blog":"Read Blog About SSRF"})</br>
 &emsp;&emsp;else:</br>
-&emsp;&emsp;&emsp;file=request.POST["blog"]</br>
-&emsp;&emsp;&emsp;try :</br>
-&emsp;&emsp;&emsp;&emsp;dirname = os.path.dirname(__file__)</br>
-&emsp;&emsp;&emsp;&emsp;filename = os.path.join(dirname, file)</br>
-&emsp;&emsp;&emsp;&emsp;file = open(filename,"r")</br>
-&emsp;&emsp;&emsp;&emsp;data = file.read()</br>
-&emsp;&emsp;&emsp;&emsp;return render(request,"Lab/ssrf/ssrf_lab.html",{"blog":data})</br>
-&emsp;&emsp;&emsp;except:</br>
-&emsp;&emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab.html", {"blog": "No blog found"})</br>
-&emsp;else:</br>    
+&emsp;&emsp;&emsp;try:</br>
+&emsp;&emsp;&emsp;&emsp;filename = blog_path(request.POST.get("blog"))</br>
+&emsp;&emsp;&emsp;except BlogNotAllowed:</br>
+&emsp;&emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab.html", {"blog": "Refused: ..."}, status=400)</br>
+&emsp;&emsp;&emsp;try:</br>
+&emsp;&emsp;&emsp;&emsp;with open(filename, "r", encoding="utf-8") as blog_file:</br>
+&emsp;&emsp;&emsp;&emsp;&emsp;data = blog_file.read()</br>
+&emsp;&emsp;&emsp;except (OSError, UnicodeDecodeError):</br>
+&emsp;&emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab.html", {"blog": "No blog found"}, status=404)</br>
+&emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab.html", {"blog": data})</br>
+&emsp;else:</br>
 &emsp;&emsp;return redirect('login')</br>
    </code>
     
