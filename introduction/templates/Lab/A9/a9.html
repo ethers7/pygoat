@@ -33,8 +33,12 @@
                 <code>!!python/object/apply:subprocess.Popen<br>
                 - ls
             </code>
-                <li> On Uploading this file the user should be able to see the output of the command executed in the
-                    Terminal running Django.</li>
+                <li> Upload the file: the converter now parses uploads with <code>yaml.safe_load</code>, which only
+                    builds plain data (strings, numbers, lists, maps). The <code>!!python/object/apply</code> tag is
+                    rejected with an error instead of being executed, so no command runs on the server.</li>
+                <li> Upload a plain yaml file such as <code>user: pygoat</code> to see the converter still work. The
+                    lesson: a vulnerable component only becomes remote code execution when the app calls its unsafe
+                    API - patch the dependency and use the safe loader.</li>
 
             </ul>
 

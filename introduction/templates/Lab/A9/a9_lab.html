@@ -18,7 +18,7 @@
     {% if data %}
     <h5>Here is your output:</h5><br>
     <pre>{{data}}</pre><br>
-    <b>Check Django Terminal for Command's output</b>
+    <b>Uploads are parsed with yaml.safe_load, so unsafe python/object tags are rejected instead of executed</b>
     {% endif %}
 </div>
 <br>

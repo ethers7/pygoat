@@ -280,9 +280,11 @@ To see results on screen, make sure your browser has JavaScript enabled.
 
 This Lab consists of a Page that has some content only available to for the admin to see, How can we access that page as admin? How is our role defined?
 
-If we check the cookie we see that it is base64 encoded, on decoding we realise it is pickle serialised and we can see some attributes, can you change the attributes to make the page readable?
+If we check the cookie we see that it is base64 encoded, on decoding we realise it is a serialised object and we can see some attributes, can you change the attributes to make the page readable?
 
-Try to flip the bit of the admin from ```...admin\x94K\x00... to ...admin\x94K\x00...```
+The cookie decodes to ```{"admin": 0}``` - flip the value to ```{"admin": 1}```, base64 encode it again and replace the `token` cookie.
+
+The app deserialises this cookie with a data-only format (JSON), so tampering can only change data, it can no longer be escalated to remote code execution the way a pickle payload could. The access control lesson stands: never trust a client supplied object for authorisation.
 
 ## A9:Using Components with Know Vulnerability
 
@@ -299,7 +301,8 @@ The user on accessing the lab is provided with a feature to convert yaml files i
 - ls
 ```
 
-* On Uploading this file the user should be able to see the output of the command executed.
+* On Uploading this file the converter (which now uses `yaml.safe_load`) rejects the `!!python/object/apply` tag with an error instead of executing it, so no command runs on the server.
+* Upload a plain yaml file such as `user: pygoat` to see the converter still work. The lesson: a vulnerable component only becomes remote code execution when the app calls its unsafe API, so patch the dependency and use the safe loader.
 
 
 ## A10:Insufficient Logging & Monitoring

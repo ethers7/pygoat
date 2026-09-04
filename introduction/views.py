@@ -4,13 +4,12 @@ import hashlib
 import json
 import logging
 import os
-import pickle
 import random
 import re
 import string
 import subprocess
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from hashlib import md5
 from io import BytesIO
 from random import randint
@@ -202,8 +201,12 @@ def insec_des(request):
 @dataclass
 class TestUser:
     admin: int = 0
-pickled_user = pickle.dumps(TestUser())
-encoded_user = base64.b64encode(pickled_user)
+
+# The token is serialized with JSON, a data-only format. Unlike pickle it can
+# only ever produce primitives (dict/list/str/int), so a tampered cookie can
+# never instantiate arbitrary objects or execute code when deserialized.
+serialized_user = json.dumps(asdict(TestUser())).encode('utf-8')
+encoded_user = base64.b64encode(serialized_user)
 
 def insec_des_lab(request):
     if request.user.is_authenticated:
@@ -213,9 +216,13 @@ def insec_des_lab(request):
             token = encoded_user
             response.set_cookie(key='token',value=token.decode('utf-8'))
         else:
-            token = base64.b64decode(token)
-            admin = pickle.loads(token)
-            if admin.admin == 1:
+            # Untrusted cookie: decode and parse as JSON only, and fail closed
+            # (non-admin) on any malformed or unexpected payload.
+            try:
+                admin = json.loads(base64.b64decode(token))
+            except (ValueError, TypeError):
+                admin = {}
+            if isinstance(admin,dict) and admin.get("admin") == 1:
                 response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Welcome Admin, SECRETKEY:ADMIN123"})
                 return response
 
@@ -566,7 +573,10 @@ def a9_lab(request):
             try :
                 file=request.FILES["file"]
                 try :
-                    data = yaml.load(file,yaml.Loader)
+                    # safe_load only builds plain Python data structures; the
+                    # unsafe python/object tags that lead to code execution are
+                    # rejected instead of being constructed.
+                    data = yaml.safe_load(file)
                     
                     return render(request,"Lab/A9/a9_lab.html",{"data":data})
                 except:
