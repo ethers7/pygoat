@@ -24,12 +24,16 @@
             <p class="bp">
                 Your current session is active. Remember that this lab demonstrates insecure session management.
                 The session token is a base64 encoded string containing your username and timestamp.
+                The cookie itself is now sent with HttpOnly, SameSite=Lax and (by default) Secure, so
+                <code>document.cookie</code> can no longer read it - inspect it in your browser's
+                developer tools (Application &gt; Cookies) or in an intercepting proxy instead.
             </p>
             {% if role == 'user' %}
             <div class="lab">
                 <p class="bp">
                     <b>Challenge:</b> Can you find a way to escalate your privileges to admin?<br>
-                    <b>Hint:</b> Examine your session cookie and its structure.
+                    <b>Hint:</b> Examine your session cookie and its structure in developer tools
+                    (Application &gt; Cookies) and try forging a token of your own.
                 </p>
             </div>
             {% endif %}
@@ -49,7 +53,11 @@
         </div>
 
         <div style="text-align: right; margin-top: 20px;">
-            <button type="button" onclick="logout()">Logout</button>
+            <!-- The session cookie is HttpOnly, so JavaScript can no longer
+                 clear it: log out through the server instead. -->
+            <form method="POST" action="/logout" style="display: inline;">
+                <button type="submit">Logout</button>
+            </form>
         </div>
     </div>
 </div>
@@ -72,12 +80,4 @@
     margin: 0 5px;
 }
 </style>
-
-<script>
-function logout() {
-    // Clear the session cookie and redirect to login
-    document.cookie = "session=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-    window.location.href = "/lab";
-}
-</script>
 {% endblock %} 

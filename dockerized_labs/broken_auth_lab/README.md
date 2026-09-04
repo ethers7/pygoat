@@ -6,8 +6,10 @@ This is a deliberately vulnerable web application that demonstrates common authe
 
 1. Weak Password Requirements
 2. Plain Text Password Storage
-3. Insecure Session Management
-4. Vulnerable "Remember Me" Functionality
+3. Insecure Session Management (the session token is still a guessable base64 blob, but the
+   cookie carrying it is now fixed: it is set with `HttpOnly`, `SameSite=Lax` and `Secure`)
+4. Vulnerable "Remember Me" Functionality (still a 30-day token; the cookie flags above apply
+   to it as well)
 5. Password Reset Token Handling (token generation is now fixed: reset tokens come from a
    cryptographically secure random generator instead of an MD5 digest of email + timestamp;
    the remaining reset weaknesses - no expiry, token shown in the UI - are still exercises)
@@ -30,6 +32,29 @@ This is a deliberately vulnerable web application that demonstrates common authe
    ```
 4. Access the lab at http://localhost:5000
 
+### Cookie security flag (plain HTTP opt-out)
+
+The session cookie is set with `Secure` **by default**, which means browsers only send it back
+over HTTPS. This lab is served over plain HTTP on `http://localhost:5000`, so if you run it that
+way you must explicitly opt out, otherwise the browser will drop the cookie and login will appear
+to do nothing:
+
+```bash
+# only for local, plain-HTTP runs of this lab
+BROKEN_AUTH_LAB_INSECURE_COOKIES=1 docker-compose up --build
+```
+
+or add it to the `environment:` block in `docker-compose.yml`:
+
+```yaml
+    environment:
+      - BROKEN_AUTH_LAB_INSECURE_COOKIES=1
+```
+
+Accepted opt-out values are `1`, `true`, `yes` and `on` (case-insensitive). Anything else - including
+leaving the variable unset - keeps the secure behaviour. When the lab is served over HTTPS, leave the
+variable unset. `HttpOnly` and `SameSite=Lax` are always applied and are not configurable.
+
 ### Default Credentials
 
 The lab comes with two pre-configured users:
@@ -51,8 +76,9 @@ The lab comes with two pre-configured users:
 
 2. **Session Token Analysis**
    - Login with remember me enabled
-   - Analyze the session cookie structure
-   - Try to manipulate the session token
+   - Analyze the session cookie structure - it is now `HttpOnly`, so `document.cookie` cannot
+     read it; use developer tools (Application > Cookies) or a proxy instead
+   - Try to manipulate the session token (the token itself is still forgeable: that is the exercise)
 
 3. **Password Reset Exploitation**
    - Request a password reset
