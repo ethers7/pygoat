@@ -35,11 +35,14 @@ def ssrf_lab2(request):<br>
 &emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html")<br>
 <br>
 &emsp;elif request.method == "POST":<br>
-&emsp;&emsp;url = request.POST["url"]<br>
+&emsp;&emsp;# only http(s) URLs on allowlisted public hosts are fetched<br>
+&emsp;&emsp;safe_url = validate_fetch_url(request.POST["url"])<br>
+&emsp;&emsp;if safe_url is None:<br>
+&emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "URL not allowed."})<br>
 &emsp;&emsp;try:<br>
-&emsp;&emsp;&emsp;response = requests.get(url)<br>
-&emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})<br>
-&emsp;&emsp;except:<br>
+&emsp;&emsp;&emsp;response = requests.get(safe_url, allow_redirects=False, timeout=5)<br>
+&emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode(errors="replace")})<br>
+&emsp;&emsp;except requests.RequestException:<br>
 &emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})<br>
    </code>
     

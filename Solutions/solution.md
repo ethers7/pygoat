@@ -545,5 +545,7 @@ It will create one fake log and also it can cause log overflow also by passing l
 This lab have a local page at ```/ssrf_target``` that can be only accesed from localhost. Now if we do ```python manage.py runserver``` that page will be accisible 
 but if we start the server by ```python manage.py runserver 0:8000``` the page wont be accessble from ```http://[your ip]/ssrf_target``` 
 
-Now comes the utility that takes the URL and fetch the data, if we give the localhost url to this utility it can fetch the data easily and we can see the page from outside localhost. 
+Now comes the utility that takes the URL and fetch the data. It used to fetch any URL, so giving it the localhost url exposed the page from outside localhost (and internal targets such as the cloud metadata service at ```169.254.169.254```).
+
+The utility is now fixed with a positive allow list (see ```validate_fetch_url``` in ```introduction/utility.py```): only ```http```/```https``` URLs on an allowlisted host that resolves to a public address are fetched, redirects are not followed, and everything else fails closed. So ```https://example.com``` still works, while ```http://127.0.0.1:8000/ssrf_target``` and ```http://169.254.169.254/latest/meta-data/``` are rejected before any request is made. Additional hosts can be allowed with the ```SSRF_ALLOWED_HOSTS``` environment variable. 
 

@@ -1,7 +1,10 @@
 import hashlib
+import ipaddress
 import os
 import re
+import socket
 import uuid
+from urllib.parse import urlsplit, urlunsplit
 
 from .models import *
 
@@ -19,6 +22,74 @@ def validate_host(host):
     if not _HOST_RE.match(host):
         return None
     return host
+
+
+# Allowlist for URLs the server fetches on behalf of a user. Only plain
+# http(s) to one of these public hosts is fetched, so a user supplied URL can
+# never reach an internal service (loopback, RFC1918, link-local / the
+# 169.254.169.254 cloud metadata endpoint). Deployments can extend the list
+# with the comma separated SSRF_ALLOWED_HOSTS environment variable.
+_URL_ALLOWED_SCHEMES = ('http', 'https')
+_URL_ALLOWED_PORTS = (80, 443)
+_URL_ALLOWED_HOSTS = ('example.com', 'www.example.com', 'owasp.org', 'www.owasp.org')
+
+
+def _allowed_fetch_hosts():
+    """Return the set of hostnames the server may fetch from."""
+    hosts = set(_URL_ALLOWED_HOSTS)
+    for host in os.environ.get('SSRF_ALLOWED_HOSTS', '').split(','):
+        host = host.strip().rstrip('.').lower()
+        if host:
+            hosts.add(host)
+    return hosts
+
+
+def _is_public_host(host):
+    """True only when every address `host` resolves to is publicly routable."""
+    try:
+        addresses = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        return False
+    if not addresses:
+        return False
+    for address in addresses:
+        try:
+            ip = ipaddress.ip_address(address[4][0])
+        except ValueError:
+            return False
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_multicast or ip.is_reserved or ip.is_unspecified):
+            return False
+    return True
+
+
+def validate_fetch_url(url):
+    """Return a safe URL to fetch, or None when it is not allowlisted.
+
+    Fails closed: the URL must use http(s) on a standard port, its host must
+    be on the allowlist and must resolve only to publicly routable addresses.
+    Any credentials and fragment are dropped and the URL is rebuilt from the
+    validated parts, so only the checked destination is ever requested.
+    """
+    if not isinstance(url, str):
+        return None
+    try:
+        parts = urlsplit(url.strip())
+        port = parts.port
+    except ValueError:
+        return None
+    scheme = parts.scheme.lower()
+    if scheme not in _URL_ALLOWED_SCHEMES:
+        return None
+    if port is not None and port not in _URL_ALLOWED_PORTS:
+        return None
+    host = validate_host((parts.hostname or '').lower())
+    if not host or host not in _allowed_fetch_hosts():
+        return None
+    if not _is_public_host(host):
+        return None
+    netloc = host if port is None else '{}:{}'.format(host, port)
+    return urlunsplit((scheme, netloc, parts.path, parts.query, ''))
 
 
 # import re

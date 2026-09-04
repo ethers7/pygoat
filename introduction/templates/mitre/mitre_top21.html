@@ -37,14 +37,18 @@
 <div class="lab">
     <p class="bp">
       This website sends a request to the given url and displays the page withing the page.
-      now there is a page at <a href="/ssrf_target">/ssrf_target</a> which only allowes request from localhost ( ie 127.0.0.1 )
+      There is a page at <a href="/ssrf_target">/ssrf_target</a> which only allowes request from localhost ( ie 127.0.0.1 ),
+      and an attacker used to be able to reach it (and any other internal address, such as the cloud metadata
+      service at <code>169.254.169.254</code>) by making the server fetch it.
       <br>
-      now start the server using <code>python manage.py runserver 0:8000</code><br>
-      get your network ip using <code>ifconfig</code> or <code>ipcofig</code>(in windows) <br>
-      now go to http://[your ip]/ssrf_target
+      The fetch utility is now mitigated: it only accepts <code>http</code>/<code>https</code> URLs whose host is on a
+      positive allow list and resolves to a public address, and it does not follow redirects.
       <br>
-      Now you can't access the page because it is not from localhost.
-      Try to get access to this page content now using the utility.
+      Try it with an allowlisted URL such as <code>https://example.com</code> - the page content is fetched and shown.
+      Then try <code>http://127.0.0.1:8000/ssrf_target</code>, <code>http://[your ip]/ssrf_target</code>,
+      <code>http://169.254.169.254/latest/meta-data/</code> or <code>file:///etc/passwd</code>: every one of them is
+      rejected before any request is made. Extra hosts can be allowed with the
+      <code>SSRF_ALLOWED_HOSTS</code> environment variable.
     </p>
     <br>
     <div align="right"> <button class="btn btn-info" type="button" onclick="window.location.href='/ssrf_lab2'">Access

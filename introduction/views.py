@@ -36,7 +36,8 @@ from requests.structures import CaseInsensitiveDict
 from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
-from .utility import customHash, filter_blog, validate_host
+from .utility import (customHash, filter_blog, validate_fetch_url,
+                      validate_host)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -980,11 +981,18 @@ def ssrf_lab2(request):
         return render(request, "Lab/ssrf/ssrf_lab2.html")
 
     elif request.method == "POST":
-        url = request.POST["url"]
+        # Fail closed: only http(s) URLs pointing at an allowlisted public host
+        # are fetched, so the request cannot be pointed at an internal service.
+        safe_url = validate_fetch_url(request.POST["url"])
+        if safe_url is None:
+            return render(request, "Lab/ssrf/ssrf_lab2.html",
+                          {"error": "URL not allowed. Only http(s) URLs on the allowlisted public hosts are fetched."})
         try:
-            response = requests.get(url)
-            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+            # allow_redirects=False: a redirect would otherwise send us to an
+            # unvalidated destination after the allowlist check has passed.
+            response = requests.get(safe_url, allow_redirects=False, timeout=5)
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode(errors="replace")})
+        except requests.RequestException:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
