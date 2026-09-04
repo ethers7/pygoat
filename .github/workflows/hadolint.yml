@@ -27,7 +27,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3.7.0
 
       - name: Run hadolint on Dockerfile
         uses: hadolint/hadolint-action@f988afea3da57ee48710a9795b6bb677cc901183
