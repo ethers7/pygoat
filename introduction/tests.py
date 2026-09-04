@@ -144,10 +144,17 @@ class ValidateFetchUrlTests(SimpleTestCase):
         self.assertIsNone(validate_fetch_url("http://example.com@169.254.169.254/"))
 
 
+LAB_PASSWORD = "P@$$w0rd"
+# Frozen legacy-format fixtures: the md5 and the sha1 of LAB_PASSWORD above,
+# pinned as literals so the tests never compute a weak digest at run time.
+LEGACY_MD5_OF_LAB_PASSWORD = "c53e479b03b3220d3d56da88c4cace20"
+LEGACY_SHA1_OF_LAB_PASSWORD = "6b283bb060c269432d08ac33b47a337c0a40035d"
+
+
 class LabPasswordHashingTests(SimpleTestCase):
     """Lab credentials must be stored with a salted KDF, never a fast digest."""
 
-    PASSWORD = "P@$$w0rd"
+    PASSWORD = LAB_PASSWORD
 
     def test_hash_password_is_salted_and_not_a_bare_digest(self):
         first = hash_password(self.PASSWORD)
@@ -155,7 +162,7 @@ class LabPasswordHashingTests(SimpleTestCase):
         self.assertNotEqual(first, self.PASSWORD)
         self.assertNotEqual(first, second)          # random per-password salt
         self.assertTrue(first.startswith("pbkdf2_sha256$"))
-        self.assertNotIn(hashlib.md5(self.PASSWORD.encode()).hexdigest(), first)
+        self.assertNotIn(LEGACY_MD5_OF_LAB_PASSWORD, first)
         self.assertNotIn(hashlib.sha256(self.PASSWORD.encode()).hexdigest(), first)
 
     def test_verify_password_accepts_the_right_password_only(self):
@@ -167,8 +174,8 @@ class LabPasswordHashingTests(SimpleTestCase):
 
     def test_verify_password_rejects_legacy_and_cracked_digests(self):
         """A dumped MD5/SHA256 digest is not a credential and never verifies."""
-        md5_digest = hashlib.md5(self.PASSWORD.encode()).hexdigest()
-        sha1_digest = hashlib.sha1(self.PASSWORD.encode()).hexdigest()
+        md5_digest = LEGACY_MD5_OF_LAB_PASSWORD
+        sha1_digest = LEGACY_SHA1_OF_LAB_PASSWORD
         for stored in (md5_digest,
                        sha1_digest,
                        "md5$$" + md5_digest,

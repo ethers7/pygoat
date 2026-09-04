@@ -23,6 +23,14 @@ from . import views
 from .models import AF_session_id, Blogs, CF_user, CSRF_user_tbl, authLogin
 from .utility import hash_password
 
+LAB_PASSWORD = "p@ssword"
+CSRF_LAB_PASSWORD = "csrf-lab-pass"
+# Frozen legacy-format fixtures: the md5 of LAB_PASSWORD / CSRF_LAB_PASSWORD
+# above, pinned as literals so the tests never compute a weak digest at run
+# time. They stand in for a dumped legacy row, which must never authenticate.
+LEGACY_MD5_OF_LAB_PASSWORD = "90f2c9c53f66540e67349e0ab83d8cd0"
+LEGACY_MD5_OF_CSRF_LAB_PASSWORD = "29d8e2fee5b7078dfbbff1f6e9badd72"
+
 
 @override_settings(
     DEBUG=True,
@@ -171,7 +179,7 @@ class PlatformRegressionTests(TestCase):
 
     def test_crypto_failure_lab_login_uses_a_salted_password_hash(self):
         """Lab 1 still logs the seeded demo account in, without MD5 storage."""
-        lab_password = "p@ssword"
+        lab_password = LAB_PASSWORD
         CF_user.objects.create(
             username="admin",
             password=hash_password(lab_password),
@@ -184,7 +192,7 @@ class PlatformRegressionTests(TestCase):
         self.assertContains(r, "Successfully logged in as admin")
 
     def test_crypto_failure_lab_login_rejects_wrong_password_and_md5_digest(self):
-        lab_password = "p@ssword"
+        lab_password = LAB_PASSWORD
         CF_user.objects.create(
             username="admin",
             password=hash_password(lab_password),
@@ -192,7 +200,7 @@ class PlatformRegressionTests(TestCase):
         )
         self.client.force_login(self.user)
         for password in ("not-the-password",
-                         hashlib.md5(lab_password.encode()).hexdigest()):
+                         LEGACY_MD5_OF_LAB_PASSWORD):
             r = self.client.post(reverse("cryptographic_failure_lab"),
                                  {"username": "admin", "password": password})
             self.assertEqual(r.status_code, 200, msg=password)
@@ -200,10 +208,10 @@ class PlatformRegressionTests(TestCase):
 
     def test_crypto_failure_lab_login_fails_closed_on_a_legacy_md5_row(self):
         """A row still holding a bare MD5 digest is not a usable credential."""
-        lab_password = "p@ssword"
+        lab_password = LAB_PASSWORD
         CF_user.objects.create(
             username="legacy",
-            password=hashlib.md5(lab_password.encode()).hexdigest(),
+            password=LEGACY_MD5_OF_LAB_PASSWORD,
             password2="",
         )
         self.client.force_login(self.user)
@@ -214,7 +222,7 @@ class PlatformRegressionTests(TestCase):
 
     def test_csrf_lab_login_verifies_the_stored_password_hash(self):
         """CSRF lab login still works for a hashed account and fails closed."""
-        lab_password = "csrf-lab-pass"
+        lab_password = CSRF_LAB_PASSWORD
         CSRF_user_tbl.objects.create(
             username="jack",
             password=hash_password(lab_password),
@@ -228,7 +236,7 @@ class PlatformRegressionTests(TestCase):
         self.assertIn("auth_cookiee", r.cookies)
 
         for username, password in (("jack", "wrong"),
-                                   ("jack", hashlib.md5(lab_password.encode()).hexdigest()),
+                                   ("jack", LEGACY_MD5_OF_CSRF_LAB_PASSWORD),
                                    ("nobody", lab_password)):
             r = self.client.post("/mitre/9/lab/login",
                                  {"username": username, "password": password})
