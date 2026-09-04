@@ -25,7 +25,6 @@ from django.contrib.auth.forms import UserCreationForm
 from django.core import serializers
 from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
-from django.template import loader
 from PIL import Image, ImageMath
 from requests.structures import CaseInsensitiveDict
 

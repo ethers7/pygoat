@@ -318,9 +318,6 @@ def ssrf_html_input_extractor(code):
 def unique_id_generator():
     id = str(uuid.uuid4()).split('-')[-1]
 
-def filter_blog(code):
-    return code
-
 def customHash(password):
     return hashlib.sha256(password.encode()).hexdigest()[::-1]
 

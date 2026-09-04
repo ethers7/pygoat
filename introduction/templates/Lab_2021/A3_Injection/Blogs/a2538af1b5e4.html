@@ -1,2 +1,8 @@
-{% extends 'introduction/base.html' %}                {% block content %}{% block title %}                <title>SSTI-Blogs</title>                {% endblock %}<h2> ip --> {{ip}} </h2>
-<p> secret key --> {{settings.SECRET_KEY}} </p>{% endblock %}
+<!--
+Leftover artifact of the SSTI lab's vulnerable version, which concatenated each
+post into Django template source and wrote it into this directory. Nothing
+renders this directory any more: a post is stored in Blogs.content and shown by
+ssti_blog.html as autoescaped context. The attacker-authored template tags that
+were committed here (reads of the project secret key and of the admin log) have
+been removed, so there is no stored payload left to compile.
+-->
