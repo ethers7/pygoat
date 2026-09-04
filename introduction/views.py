@@ -6,12 +6,12 @@ import logging
 import os
 import random
 import re
+import secrets
 import string
 import subprocess
 import uuid
 from dataclasses import asdict, dataclass
 from io import BytesIO
-from random import randint
 
 import defusedxml.ElementTree as defused_etree
 import jwt
@@ -567,7 +567,10 @@ def login_otp(request):
 def Otp(request):
     if request.method=="GET":
         email=request.GET.get('email')
-        otpN=randint(100,999)
+        # The lab is about a short (brute-forceable) OTP, not a guessable one:
+        # keep the 3-digit 100-999 range, but draw it from a CSPRNG so seeing
+        # earlier OTPs does not let the next one be predicted (CWE-330).
+        otpN=100+secrets.randbelow(900)
         if email and otpN:
             if email=="admin@pygoat.com":
                 otp.objects.filter(id=2).update(otp=otpN)
