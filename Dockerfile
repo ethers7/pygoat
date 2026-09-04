@@ -30,4 +30,15 @@ EXPOSE 8000
 
 RUN python3 /app/manage.py migrate
 WORKDIR /app
+
+
+# Run as an unprivileged user; Django writes db.sqlite3, staticfiles/ and
+# generated migrations under /app, so hand that tree to the non-root user.
+RUN useradd --create-home --uid 1000 --shell /bin/bash pygoat \
+    && chown -R pygoat:pygoat /app
+
+
+USER pygoat
+
+
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers","6", "pygoat.wsgi"]
