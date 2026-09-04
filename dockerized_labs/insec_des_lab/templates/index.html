@@ -27,10 +27,15 @@
                 This Lab consists of a Page that has some content only available to for the admin to see. How can we access that
                 page as admin? How is our role defined?
             </p>
-            <p class="bp">If we check the cookie we see that it is base64 encoded, on decoding we realise it is pickle
-                serialised and we can see some attributes, can you change the attributes to make the page readable?
+            <p class="bp">If we check the token we see that it is base64 encoded, on decoding we realise it is a JSON
+                document and we can see some attributes, can you change the attributes to make the page readable?
             </p>
-            <p class="bp">Hint: try to flip the bit of the admin from ...admin\x94K\x00... to ...admin\x94K\x01...
+            <p class="bp">Hint: try to flip the admin attribute from "is_admin": false to "is_admin": true, then
+                re-encode the JSON as base64.
+            </p>
+            <p class="bp">Note: this lab now uses a data-only format (JSON) instead of pickle. The access-control
+                tampering lesson still works, but a tampered token can no longer run arbitrary code on the server,
+                which is exactly why untrusted input must never be unpickled.
             </p>
         </div>
 

@@ -1,10 +1,13 @@
 # Insecure Deserialization Lab
 
-A vulnerable web application demonstrating insecure deserialization vulnerabilities in Python using pickle.
+A web application lab demonstrating deserialization / token tampering issues in Python.
 
 ## Description
 
-This lab demonstrates the dangers of insecure deserialization by implementing a vulnerable user session mechanism that uses Python's pickle module. The application allows users to:
+This lab demonstrates the dangers of trusting client-supplied serialized data. It originally used Python's `pickle`
+module, which allowed remote code execution; it now uses a data-only format (JSON) with strict type checks, so the
+access-control tampering lesson remains while arbitrary code execution is no longer possible. The application allows
+users to:
 
 1. Create a regular user account
 2. Receive a serialized token
@@ -13,7 +16,7 @@ This lab demonstrates the dangers of insecure deserialization by implementing a 
 
 ## Features
 
-- Vulnerable pickle deserialization
+- Safe, data-only (JSON) deserialization with strict type validation
 - Base64 encoded serialized data
 - User role system (regular user vs admin)
 - Docker containerization
@@ -72,20 +75,23 @@ insec_des_lab/
 
 ## Vulnerability Details
 
-The lab uses Python's pickle module for serialization/deserialization of user data. The vulnerability exists because:
-
-1. The application trusts user-provided serialized data
-2. Uses pickle.loads() without validation
-3. The User class has a vulnerable __reduce__ method
+The lab issues a serialized token that carries the user's role, and the role is still taken from that
+client-controlled token. Originally the token was a pickled `User` object, so a crafted token could execute arbitrary
+code (`pickle.loads` on untrusted input, plus a `__reduce__` gadget on the `User` class). The token is now a JSON
+document parsed with `json.loads` and validated field by field, so only primitive data can be reconstructed.
 
 ## Exploitation Steps
 
 1. Create a regular user account
 2. Intercept the serialized token
-3. Decode the base64 token
-4. Modify the serialized data to set is_admin=True
-5. Re-encode the modified data
+3. Decode the base64 token to reveal the JSON payload
+4. Modify the payload to set `"is_admin": true`
+5. Re-encode the modified JSON as base64
 6. Submit the modified token to gain admin access
+
+Note that the remaining lesson is data tampering / broken access control: the server should derive privileges from
+server-side state (or a signed token), never from an attribute the client can edit. Code execution via the token is
+no longer possible.
 
 ## Mitigation Strategies
 
