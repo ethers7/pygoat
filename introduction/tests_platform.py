@@ -142,6 +142,23 @@ class PlatformRegressionTests(TestCase):
             self.assertEqual(r.status_code, 400, msg=payload)
             self.assertIn("Invalid expression", r.json()["error"])
 
+    def test_calculator_labs_reject_unserialisable_results(self):
+        """Both calculators answer 400/"Invalid expression", never a 500.
+
+        A complex result ((-1)**0.5) and a result too big to convert to a
+        string used to escape the evaluator and blow up in the response layer.
+        """
+        payloads = ("(-1) ** 0.5", "1e1000", "*".join(["999**99"] * 15))
+        for payload in payloads:
+            r = self.client.post("/mitre/25/lab/api", {"expression": payload})
+            self.assertEqual(r.status_code, 400, msg=payload)
+            self.assertIn("Invalid expression", r.json()["error"])
+        self.client.force_login(self.user)
+        for payload in payloads:
+            r = self.client.post("/cmd_lab2", {"val": payload})
+            self.assertEqual(r.status_code, 200, msg=payload)
+            self.assertContains(r, "Invalid expression", msg_prefix=payload)
+
     def test_login_post(self):
         r = self.client.post(
             reverse("login"),

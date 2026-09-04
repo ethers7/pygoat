@@ -53,6 +53,28 @@ class SafeArithmeticEvalTests(SimpleTestCase):
                 safe_arithmetic_eval(payload)
         self.assertRaises(UnsafeExpression, safe_arithmetic_eval, None)
 
+    def test_rejects_results_that_are_not_a_calculator_answer(self):
+        """The operand bounds must not let an unusable value out.
+
+        Such a value used to escape as an unhandled TypeError/ValueError when
+        the view serialised or rendered it (a 500, and a debug page), instead
+        of being reported as an invalid expression.
+        """
+        # A negative base with a fractional exponent yields a complex number.
+        for payload in ("(-1) ** 0.5", "(-8) ** (1 / 3)", "(-2) ** 0.5 * 2"):
+            with self.assertRaises(UnsafeExpression, msg=payload):
+                safe_arithmetic_eval(payload)
+        # Non-finite floats (inf / nan) are not serialisable as valid JSON.
+        for payload in ("1e1000", "1e1000 * 0", "1e308 * 10", "-1e1000"):
+            with self.assertRaises(UnsafeExpression, msg=payload):
+                safe_arithmetic_eval(payload)
+        # A product of individually allowed powers is still bounded: this is
+        # 4455 digits, which str()/json.dumps() refuse to convert.
+        with self.assertRaises(UnsafeExpression):
+            safe_arithmetic_eval("*".join(["999**99"] * 15))
+        # Big-but-usable answers keep working, and stay printable.
+        self.assertEqual(len(str(safe_arithmetic_eval("999 ** 99"))), 297)
+
 
 class ValidateFetchUrlTests(SimpleTestCase):
     """The SSRF lab2 fetch must only accept allowlisted public http(s) URLs."""

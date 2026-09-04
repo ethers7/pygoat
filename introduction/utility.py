@@ -1,6 +1,7 @@
 import ast
 import hashlib
 import ipaddress
+import math
 import operator
 import os
 import re
@@ -123,6 +124,14 @@ _ARITHMETIC_UNARY_OPS = {
 _MAX_EXPRESSION_LENGTH = 120
 _MAX_POW_BASE = 1000
 _MAX_POW_EXPONENT = 100
+# The operand bounds above do not bound the *result*: a product of allowed
+# powers ("999**99" repeated inside the length limit) reaches several thousand
+# digits, and str()/json.dumps() raise ValueError on such an int (CPython caps
+# int -> str conversion at 4300 digits). A calculation must never turn into an
+# unhandled error in a caller, so the size of every value is capped here too.
+# 4096 bits is about 1233 decimal digits: far beyond any calculator answer and
+# comfortably inside that conversion limit.
+_MAX_RESULT_BITS = 4096
 
 
 class UnsafeExpression(ValueError):
@@ -135,18 +144,38 @@ def _check_pow_operands(base, exponent):
         raise UnsafeExpression('exponentiation operands are too large')
 
 
+def _check_number(value):
+    """Return *value* when it is a finite, bounded real number, else raise.
+
+    Keeps the evaluator fail-closed on values that are numbers to python but
+    not a calculator answer, so a caller never has to render or serialise
+    them: a complex result (a negative base raised to a fractional power, e.g.
+    ``(-1)**0.5``), a non-finite float (``1e1000`` -> inf, inf*0 -> nan) and an
+    oversized integer are refused as UnsafeExpression instead of escaping as a
+    TypeError/ValueError from the response layer.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise UnsafeExpression('result is not a real number')
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise UnsafeExpression('result is not a finite number')
+    elif value.bit_length() > _MAX_RESULT_BITS:
+        raise UnsafeExpression('result is too large')
+    return value
+
+
 def _eval_arithmetic_node(node):
     """Evaluate one allowlisted node of an arithmetic expression tree."""
     if isinstance(node, ast.Constant):
         # bool is a subclass of int; only real numbers are calculator input.
         if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
             raise UnsafeExpression('only numeric literals are allowed')
-        return node.value
+        return _check_number(node.value)
     if isinstance(node, ast.UnaryOp):
         unary_op = _ARITHMETIC_UNARY_OPS.get(type(node.op))
         if unary_op is None:
             raise UnsafeExpression('unsupported unary operator')
-        return unary_op(_eval_arithmetic_node(node.operand))
+        return _check_number(unary_op(_eval_arithmetic_node(node.operand)))
     if isinstance(node, ast.BinOp):
         binary_op = _ARITHMETIC_BINARY_OPS.get(type(node.op))
         if binary_op is None:
@@ -155,7 +184,9 @@ def _eval_arithmetic_node(node):
         right = _eval_arithmetic_node(node.right)
         if isinstance(node.op, ast.Pow):
             _check_pow_operands(left, right)
-        return binary_op(left, right)
+        # Every intermediate value is checked, so an oversized or non-real
+        # result cannot be built up step by step either.
+        return _check_number(binary_op(left, right))
     raise UnsafeExpression('only arithmetic on numeric literals is allowed')
 
 
@@ -166,6 +197,9 @@ def safe_arithmetic_eval(expression):
     (parentheses included). Everything else - variables, attribute access,
     function calls, subscripts, strings, comparisons - is rejected, so a
     payload such as ``os.system("id")`` or ``__import__('os')`` cannot run.
+
+    The returned value is always a finite, bounded int or float, so a caller
+    can render or serialise it without an unhandled error.
 
     Raises UnsafeExpression for any input that is not such a calculation.
     """
