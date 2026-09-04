@@ -13,6 +13,11 @@ COPY . .
 ENV FLASK_APP=app.py
 ENV FLASK_ENV=development
 ENV PYTHONUNBUFFERED=1
+# app.py binds to loopback by default so a direct "python app.py" run on a
+# workstation is not reachable from the LAN. In a container the network
+# namespace is the isolation boundary and the published port (-p 5000:5000)
+# must reach the app, so bind every interface here explicitly.
+ENV BROKEN_AUTH_LAB_HOST=0.0.0.0
 
 # Run as an unprivileged user; the Flask reloader writes __pycache__ under
 # /app, so hand that tree to the non-root user.

@@ -2,6 +2,7 @@ from flask import Flask, render_template, request, redirect, url_for, make_respo
 import hmac
 import json
 import os
+import re
 import secrets
 from datetime import datetime, timedelta
 from hashlib import sha256
@@ -50,6 +51,39 @@ def debug_enabled():
     """
     opt_in = os.environ.get(DEBUG_ENV, '')
     return opt_in.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+# Interface the development server binds to. It defaults to loopback, so running
+# "python app.py" straight on a workstation exposes this deliberately vulnerable
+# lab to that machine only - never to the rest of the LAN/VPC. The container
+# image sets BROKEN_AUTH_LAB_HOST=0.0.0.0 (see Dockerfile), where binding every
+# interface is the correct behaviour: the network namespace is the isolation
+# boundary and the published port has to be able to reach the app - see README.md.
+BIND_HOST_ENV = 'BROKEN_AUTH_LAB_HOST'
+DEFAULT_BIND_HOST = '127.0.0.1'
+
+# A bind address is a hostname or an IP literal: letters, digits, dot, dash and
+# underscore, plus colon and brackets for IPv6 forms such as [::1].
+BIND_HOST_PATTERN = re.compile(r'^[A-Za-z0-9._:\[\]-]{1,253}$')
+
+
+def bind_host():
+    """Return the validated address app.run() should bind to.
+
+    An unset, empty, whitespace-only or malformed value falls back to
+    DEFAULT_BIND_HOST: a value that is not a usable address must never silently
+    turn into "bind every interface". Only an explicit, well formed value from
+    the environment widens the bind address.
+    """
+    requested = os.environ.get(BIND_HOST_ENV, '').strip()
+    if not requested:
+        return DEFAULT_BIND_HOST
+    if not BIND_HOST_PATTERN.match(requested):
+        # The rejected value is deliberately not logged (it is attacker/operator
+        # supplied text that would land in the log verbatim).
+        app.logger.warning('Ignoring malformed %s; binding to %s instead.', BIND_HOST_ENV, DEFAULT_BIND_HOST)
+        return DEFAULT_BIND_HOST
+    return requested
 
 
 # --------------------------------------------------------------------------
@@ -262,4 +296,8 @@ if __name__ == '__main__':
     # Werkzeug interactive debugger (an unauthenticated RCE console on any
     # unhandled exception) is not exposed; an operator has to opt in explicitly
     # with BROKEN_AUTH_LAB_DEBUG - see README.md.
-    app.run(host='0.0.0.0', port=5000, debug=debug_enabled()) 
+    # Fixed: the bind address is no longer hardcoded to every interface. It
+    # defaults to loopback and is only widened when BROKEN_AUTH_LAB_HOST asks
+    # for it - the container sets that to 0.0.0.0 so the published port keeps
+    # working - see README.md.
+    app.run(host=bind_host(), port=5000, debug=debug_enabled())

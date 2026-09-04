@@ -16,6 +16,8 @@ This is a deliberately vulnerable web application that demonstrates common authe
 6. No Brute Force Protection
 7. Debug Mode Enabled in Production (fixed: debug mode is no longer hardcoded on - it is off by
    default and only an explicit `BROKEN_AUTH_LAB_DEBUG` opt-in turns it on, see below)
+8. Server Bound to Every Network Interface (fixed: the development server binds to `127.0.0.1` by
+   default and only widens when `BROKEN_AUTH_LAB_HOST` says so - the container sets it, see below)
 
 ## Setup Instructions
 
@@ -88,6 +90,37 @@ through normal responses. If you want to read a traceback while working through 
 flag on deliberately for that run and turn it back off afterwards - and note that with the reloader
 running there are two processes, so the per-process CSRF HMAC key differs between them unless you
 pin `BROKEN_AUTH_LAB_CSRF_KEY` (see below).
+
+### Bind address (loopback by default, `0.0.0.0` inside the container)
+
+`app.py` used to call `app.run(host='0.0.0.0', ...)`, which binds the development server to **every**
+network interface. Running the lab directly on a workstation therefore published a deliberately
+vulnerable app - weak passwords, forgeable session tokens, reset tokens shown in the UI - to the whole
+LAN/VPC. The bind address is now configurable with a safe default:
+
+| value | effect |
+| --- | --- |
+| unset (default) | `127.0.0.1` - loopback only, reachable from the local machine |
+| `BROKEN_AUTH_LAB_HOST=0.0.0.0` | every interface (what the container sets) |
+| any other hostname / IP literal | that address |
+| empty, whitespace-only or malformed | falls back to `127.0.0.1` (never "bind everywhere") |
+
+The `Dockerfile` sets `BROKEN_AUTH_LAB_HOST=0.0.0.0`, so `docker-compose up --build` and
+`docker run -p 5000:5000` keep working exactly as before: inside a container binding all interfaces is
+the correct and intended behaviour, because the container network namespace is the isolation boundary
+and the published port has to be able to reach the app. Only the published port (`ports:` in
+`docker-compose.yml`) decides what the outside world can reach.
+
+For a non-container run, plain `python app.py` now listens on `http://127.0.0.1:5000` only. If you
+deliberately want to reach the lab from another machine on a trusted network, opt in for that run:
+
+```bash
+# deliberately expose this vulnerable lab beyond localhost - trusted networks only
+BROKEN_AUTH_LAB_HOST=0.0.0.0 python app.py
+```
+
+The port stays `5000` (unprivileged), which matters because the container runs as the non-root
+`pygoat` user.
 
 ### CSRF protection
 

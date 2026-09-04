@@ -3,6 +3,7 @@ import base64
 import hmac
 import json
 import os
+import re
 import secrets
 from dataclasses import dataclass, asdict
 from hashlib import sha256
@@ -37,6 +38,39 @@ SECURE_COOKIES_ENV = 'INSEC_DES_LAB_SECURE_COOKIES'
 def secure_cookies_enabled():
     """Return True when the lab is served over HTTPS (opt in)."""
     return os.environ.get(SECURE_COOKIES_ENV, '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+# Interface the development server binds to. It defaults to loopback, so running
+# "python main.py" straight on a workstation exposes this deliberately vulnerable
+# lab to that machine only - never to the rest of the LAN/VPC. The container image
+# sets INSEC_DES_LAB_HOST=0.0.0.0 (see Dockerfile), where binding every interface
+# is the correct behaviour: the network namespace is the isolation boundary and the
+# published port has to be able to reach the app - see README.md.
+BIND_HOST_ENV = 'INSEC_DES_LAB_HOST'
+DEFAULT_BIND_HOST = '127.0.0.1'
+
+# A bind address is a hostname or an IP literal: letters, digits, dot, dash and
+# underscore, plus colon and brackets for IPv6 forms such as [::1].
+BIND_HOST_PATTERN = re.compile(r'^[A-Za-z0-9._:\[\]-]{1,253}$')
+
+
+def bind_host():
+    """Return the validated address app.run() should bind to.
+
+    An unset, empty, whitespace-only or malformed value falls back to
+    DEFAULT_BIND_HOST: a value that is not a usable address must never silently
+    turn into "bind every interface". Only an explicit, well formed value from
+    the environment widens the bind address.
+    """
+    requested = os.environ.get(BIND_HOST_ENV, '').strip()
+    if not requested:
+        return DEFAULT_BIND_HOST
+    if not BIND_HOST_PATTERN.match(requested):
+        # The rejected value is deliberately not logged (it is attacker/operator
+        # supplied text that would land in the log verbatim).
+        app.logger.warning('Ignoring malformed %s; binding to %s instead.', BIND_HOST_ENV, DEFAULT_BIND_HOST)
+        return DEFAULT_BIND_HOST
+    return requested
 
 
 def csrf_token_for(csrf_id):
@@ -150,6 +184,10 @@ def deserialize_data():
         return render_template('result.html', message=f"Error: {str(e)}")
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
+    # Fixed: the bind address is no longer hardcoded to every interface. It
+    # defaults to loopback and is only widened when INSEC_DES_LAB_HOST asks for
+    # it - the container sets that to 0.0.0.0 so the published port keeps
+    # working - see README.md.
+    app.run(host=bind_host(), port=8080)
 
     

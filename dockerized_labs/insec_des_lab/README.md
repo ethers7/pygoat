@@ -69,6 +69,36 @@ is generated per process, or can be pinned across restarts with `INSEC_DES_LAB_C
 `http://localhost:8080`, the `Secure` flag is off by default and can be switched on with
 `INSEC_DES_LAB_SECURE_COOKIES=1` when the lab is placed behind HTTPS.
 
+## Bind address (loopback by default, `0.0.0.0` inside the container)
+
+`main.py` used to call `app.run(host='0.0.0.0', ...)`, which binds the development server to **every**
+network interface, so running the lab directly on a workstation published a deliberately vulnerable app
+to the whole LAN/VPC. The bind address is now configurable with a safe default:
+
+| value | effect |
+| --- | --- |
+| unset (default) | `127.0.0.1` - loopback only, reachable from the local machine |
+| `INSEC_DES_LAB_HOST=0.0.0.0` | every interface (what the container sets) |
+| any other hostname / IP literal | that address |
+| empty, whitespace-only or malformed | falls back to `127.0.0.1` (never "bind everywhere") |
+
+The `Dockerfile` sets `INSEC_DES_LAB_HOST=0.0.0.0` (alongside the `FLASK_RUN_HOST=0.0.0.0` used by its
+`flask run` command), so `docker-compose up --build` and `docker run -p 8080:8080` keep working exactly
+as before: inside a container binding all interfaces is the correct and intended behaviour, because the
+container network namespace is the isolation boundary and the published port has to be able to reach the
+app. Only the published port (`ports:` in `docker-compose.yml`) decides what the outside world can reach.
+
+For a non-container run, plain `python main.py` now listens on `http://127.0.0.1:8080` only. To reach it
+from another machine on a trusted network, opt in for that run:
+
+```bash
+# deliberately expose this vulnerable lab beyond localhost - trusted networks only
+INSEC_DES_LAB_HOST=0.0.0.0 python main.py
+```
+
+The port stays `8080` (unprivileged), which matters because the container runs as the non-root `pygoat`
+user.
+
 ## Lab Structure
 
 ```
