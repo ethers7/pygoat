@@ -10,6 +10,7 @@ import string
 import subprocess
 import uuid
 from dataclasses import asdict, dataclass
+from urllib.parse import urljoin
 from hashlib import md5
 from io import BytesIO
 from random import randint
@@ -36,7 +37,8 @@ from requests.structures import CaseInsensitiveDict
 from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
-from .utility import customHash, filter_blog, validate_target_host
+from .utility import (customHash, filter_blog, validate_outbound_url,
+                      validate_target_host)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -953,6 +955,13 @@ def injection_sql_lab(request):
 
 #*********************************************************SSRF*************************************************#
 
+# Bounds for the outbound fetch of the SSRF lab: redirects are followed by hand
+# so each hop can be re-validated, and a timeout keeps the request from hanging.
+SSRF_REDIRECT_CODES = (301, 302, 303, 307, 308)
+SSRF_MAX_REDIRECTS = 3
+SSRF_TIMEOUT = 10
+
+
 def ssrf(request):
     if request.user.is_authenticated:
         return render(request,"Lab/ssrf/ssrf.html")
@@ -1004,9 +1013,23 @@ def ssrf_lab2(request):
     elif request.method == "POST":
         url = request.POST["url"]
         try:
-            response = requests.get(url)
+            # Allowlist the scheme and the resolved destination before the
+            # server fetches anything, and re-validate every redirect hop so a
+            # public URL cannot bounce us into loopback, link-local (cloud
+            # metadata) or private ranges (CWE-918).
+            target = validate_outbound_url(url)
+            for _ in range(SSRF_MAX_REDIRECTS + 1):
+                response = requests.get(target, allow_redirects=False, timeout=SSRF_TIMEOUT)
+                location = response.headers.get("location")
+                if response.status_code not in SSRF_REDIRECT_CODES or not location:
+                    break
+                target = validate_outbound_url(urljoin(target, location))
+            else:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Too many redirects"})
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+        except ValueError as blocked:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": f"Invalid URL: {blocked}"})
+        except requests.RequestException:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 

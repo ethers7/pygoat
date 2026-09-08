@@ -1,19 +1,22 @@
 import base64
 import json
+import socket
 from hashlib import md5
 from unittest.mock import patch
 
 import jwt
+import requests
 from django.contrib.auth.models import User
 from django.core.exceptions import ImproperlyConfigured
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, TestCase, override_settings
+from requests.structures import CaseInsensitiveDict
 
 from .mitre import command_out, csrf_lab_jwt_key
 from .models import CSRF_user_tbl
 from .models import login as login_row
-from .utility import validate_target_host
-from .views import TestUser, encode_user
+from .utility import validate_outbound_url, validate_target_host
+from .views import SSRF_MAX_REDIRECTS, TestUser, encode_user
 
 # Test-only signing key for the CSRF lab. It is injected through settings so
 # that no JWT key literal is ever handed to jwt.encode()/jwt.decode() (CWE-522).
@@ -97,6 +100,207 @@ class TargetHostValidationTests(SimpleTestCase):
         ):
             with self.assertRaises(ValueError, msg=repr(value)):
                 validate_target_host(value)
+
+
+class OutboundUrlValidationTests(SimpleTestCase):
+    """Guards introduction.utility.validate_outbound_url (CWE-918 allowlist)."""
+
+    @staticmethod
+    def _addrinfo(*addresses):
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (a, 0))
+            for a in addresses
+        ]
+
+    def test_accepts_and_normalises_public_web_urls(self):
+        with patch("introduction.utility.socket.getaddrinfo") as getaddrinfo:
+            getaddrinfo.return_value = self._addrinfo("93.184.216.34")
+            for value, expected in (
+                ("http://example.com", "http://example.com"),
+                ("https://example.com/page?q=1", "https://example.com/page?q=1"),
+                ("  HTTP://example.com/a#frag ", "http://example.com/a"),
+            ):
+                self.assertEqual(validate_outbound_url(value), expected)
+
+    def test_rejects_non_web_schemes_and_malformed_input(self):
+        for value in (
+            "file:///etc/passwd",
+            "gopher://example.com/_test",
+            "ftp://example.com/secret",
+            "dict://example.com:11211/stat",
+            "data:text/plain,hello",
+            "example.com/no-scheme",
+            "http://",
+            "http://user:pass@example.com",
+            "http://example.com:notaport",
+            "",
+            "   ",
+            None,
+        ):
+            with self.assertRaises(ValueError, msg=repr(value)):
+                validate_outbound_url(value)
+
+    def test_rejects_destinations_that_resolve_internally(self):
+        for address in (
+            "127.0.0.1",
+            "169.254.169.254",
+            "10.0.0.5",
+            "172.16.4.9",
+            "192.168.1.1",
+            "0.0.0.0",
+            "224.0.0.1",
+            "::1",
+            "fe80::1",
+            "::ffff:127.0.0.1",
+        ):
+            with patch("introduction.utility.socket.getaddrinfo") as getaddrinfo:
+                getaddrinfo.return_value = self._addrinfo(address)
+                with self.assertRaises(ValueError, msg=address):
+                    validate_outbound_url("http://rebind.example.com")
+
+    def test_rejects_when_any_resolved_address_is_internal(self):
+        with patch("introduction.utility.socket.getaddrinfo") as getaddrinfo:
+            getaddrinfo.return_value = self._addrinfo("93.184.216.34", "127.0.0.1")
+            with self.assertRaises(ValueError):
+                validate_outbound_url("http://rebind.example.com")
+
+    def test_rejects_hosts_that_do_not_resolve(self):
+        with patch("introduction.utility.socket.getaddrinfo") as getaddrinfo:
+            getaddrinfo.side_effect = socket.gaierror("no such host")
+            with self.assertRaises(ValueError):
+                validate_outbound_url("http://nx.example.invalid")
+
+    def test_metadata_and_loopback_literals_are_rejected_without_dns(self):
+        for value in (
+            "http://169.254.169.254/latest/meta-data/",
+            "http://127.0.0.1:8080/admin",
+            "http://[::1]:8080/admin",
+        ):
+            with self.assertRaises(ValueError, msg=value):
+                validate_outbound_url(value)
+
+
+class _FakeResponse:
+    """Minimal stand-in for requests.Response used by the SSRF lab tests."""
+
+    def __init__(self, status_code=200, content=b"", location=None):
+        self.status_code = status_code
+        self.content = content
+        self.headers = CaseInsensitiveDict()
+        if location is not None:
+            self.headers["Location"] = location
+
+
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+)
+class SsrfLabFetchTests(TestCase):
+    """The SSRF lab must still fetch a URL, but only a public one.
+
+    Guards introduction.views.ssrf_lab2 against a regression back to
+    requests.get() on an unvalidated, redirect-following request built from
+    request.POST (CWE-918).
+    """
+
+    PASSWORD = "Str0ng-Passw0rd!"
+    PUBLIC_URL = "http://example.com/index.html"
+    METADATA_URL = "http://169.254.169.254/latest/meta-data/"
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="ssrfuser",
+            email="ssrfuser@example.com",
+            password=self.PASSWORD,
+        )
+        self.client.force_login(self.user)
+
+    def _post(self, url):
+        return self.client.post("/ssrf_lab2", {"url": url})
+
+    def test_still_fetches_a_public_url_and_renders_the_body(self):
+        with patch("introduction.utility.socket.getaddrinfo") as getaddrinfo, \
+                patch("introduction.views.requests.get") as get:
+            getaddrinfo.return_value = OutboundUrlValidationTests._addrinfo(
+                "93.184.216.34"
+            )
+            get.return_value = _FakeResponse(content=b"<h1>public page</h1>")
+            r = self._post(self.PUBLIC_URL)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.context["response"], "<h1>public page</h1>")
+        args, kwargs = get.call_args
+        self.assertEqual(args[0], self.PUBLIC_URL)
+        self.assertFalse(kwargs["allow_redirects"])
+        self.assertTrue(kwargs["timeout"])
+
+    def test_cloud_metadata_endpoint_is_never_requested(self):
+        with patch("introduction.views.requests.get") as get:
+            r = self._post(self.METADATA_URL)
+        get.assert_not_called()
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("Invalid URL", r.context["error"])
+        self.assertIsNone(r.context.get("response"))
+
+    def test_non_web_scheme_is_never_requested(self):
+        with patch("introduction.views.requests.get") as get:
+            r = self._post("file:///etc/passwd")
+        get.assert_not_called()
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("Invalid URL", r.context["error"])
+
+    def test_public_redirect_is_followed(self):
+        with patch("introduction.utility.socket.getaddrinfo") as getaddrinfo, \
+                patch("introduction.views.requests.get") as get:
+            getaddrinfo.return_value = OutboundUrlValidationTests._addrinfo(
+                "93.184.216.34"
+            )
+            get.side_effect = [
+                _FakeResponse(302, location="http://example.org/moved"),
+                _FakeResponse(content=b"redirected body"),
+            ]
+            r = self._post(self.PUBLIC_URL)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.context["response"], "redirected body")
+        self.assertEqual(get.call_args_list[1][0][0], "http://example.org/moved")
+
+    def test_redirect_into_a_blocked_destination_is_not_followed(self):
+        with patch("introduction.utility.socket.getaddrinfo") as getaddrinfo, \
+                patch("introduction.views.requests.get") as get:
+            getaddrinfo.return_value = OutboundUrlValidationTests._addrinfo(
+                "93.184.216.34"
+            )
+            get.side_effect = [
+                _FakeResponse(302, location=self.METADATA_URL),
+                _FakeResponse(content=b"metadata leak"),
+            ]
+            r = self._post(self.PUBLIC_URL)
+        self.assertEqual(get.call_count, 1)
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("Invalid URL", r.context["error"])
+        self.assertIsNone(r.context.get("response"))
+
+    def test_redirect_loop_fails_closed(self):
+        with patch("introduction.utility.socket.getaddrinfo") as getaddrinfo, \
+                patch("introduction.views.requests.get") as get:
+            getaddrinfo.return_value = OutboundUrlValidationTests._addrinfo(
+                "93.184.216.34"
+            )
+            get.return_value = _FakeResponse(302, location=self.PUBLIC_URL)
+            r = self._post(self.PUBLIC_URL)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.context["error"], "Too many redirects")
+        self.assertLessEqual(get.call_count, SSRF_MAX_REDIRECTS + 1)
+
+    def test_transport_errors_still_fail_closed(self):
+        with patch("introduction.utility.socket.getaddrinfo") as getaddrinfo, \
+                patch("introduction.views.requests.get") as get:
+            getaddrinfo.return_value = OutboundUrlValidationTests._addrinfo(
+                "93.184.216.34"
+            )
+            get.side_effect = requests.Timeout("too slow")
+            r = self._post(self.PUBLIC_URL)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.context["error"], "Invalid URL")
 
 
 @override_settings(

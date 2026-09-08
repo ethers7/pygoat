@@ -2,7 +2,9 @@ import hashlib
 import ipaddress
 import os
 import re
+import socket
 import uuid
+from urllib.parse import urlsplit, urlunsplit
 
 from .models import *
 
@@ -12,6 +14,10 @@ _HOSTNAME_RE = re.compile(
     r'^(?!-)[A-Za-z0-9-]{1,63}(?<!-)'
     r'(?:\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?$'
 )
+
+# Only plain web schemes may be fetched server-side; everything else (file://,
+# gopher://, ftp://, dict://, ...) is a classic SSRF escalation vector.
+_ALLOWED_URL_SCHEMES = ('http', 'https')
 
 
 def validate_target_host(value):
@@ -41,6 +47,65 @@ def validate_target_host(value):
     if _HOSTNAME_RE.match(host):
         return host
     raise ValueError('not a valid hostname or IP address')
+
+
+def _assert_public_destination(host):
+    """Reject a host that resolves to an address the server must not reach.
+
+    The literal string is not enough: ``localtest.me`` or an attacker
+    controlled record both look public while resolving inside the perimeter,
+    so every address returned for *host* is checked.
+    """
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        raise ValueError('URL host could not be resolved')
+    addresses = {info[4][0] for info in infos}
+    if not addresses:
+        raise ValueError('URL host could not be resolved')
+    for address in addresses:
+        # getaddrinfo can hand back a scoped IPv6 literal (fe80::1%eth0).
+        ip = ipaddress.ip_address(address.split('%')[0])
+        ip = getattr(ip, 'ipv4_mapped', None) or ip
+        if (ip.is_loopback or ip.is_link_local or ip.is_private
+                or ip.is_multicast or ip.is_reserved or ip.is_unspecified):
+            raise ValueError('URL resolves to a blocked internal address')
+
+
+def validate_outbound_url(value):
+    """Validate an untrusted URL before it is fetched server-side.
+
+    The SSRF lab must still fetch a URL supplied by the user, so the request
+    target is allowlisted at the trust boundary instead of being handed
+    straight to ``requests`` (CWE-918): the scheme must be http/https and the
+    destination must resolve to a public unicast address, which keeps
+    loopback, the 169.254.169.254 cloud metadata service and other
+    link-local, private or reserved ranges out of reach. Returns the
+    normalised URL and raises ``ValueError`` for anything rejected, so the
+    caller can fail closed. Redirect targets must be re-validated with this
+    same helper.
+    """
+    if not isinstance(value, str):
+        raise ValueError('not a valid http(s) URL')
+    url = value.strip()
+    if not url:
+        raise ValueError('not a valid http(s) URL')
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+        parts.port  # a malformed port raises ValueError
+    except ValueError:
+        raise ValueError('not a valid http(s) URL')
+    if parts.scheme.lower() not in _ALLOWED_URL_SCHEMES:
+        raise ValueError('only http:// and https:// URLs may be fetched')
+    if not host:
+        raise ValueError('not a valid http(s) URL')
+    if parts.username or parts.password:
+        raise ValueError('credentials are not allowed in the URL')
+    _assert_public_destination(host)
+    return urlunsplit(
+        (parts.scheme.lower(), parts.netloc, parts.path, parts.query, '')
+    )
 
 
 def ssrf_code_converter(code):
