@@ -9,6 +9,7 @@ from django.shortcuts import redirect, render
 from django.views.decorators.csrf import csrf_exempt
 
 from .models import CSRF_user_tbl
+from .utility import validate_target_host
 from .views import authentication_decorator
 
 # import os
@@ -230,15 +231,30 @@ def mitre_lab_17(request):
     return render(request, 'mitre/mitre_lab_17.html')
 
 def command_out(command):
-    process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    """Run ``command``, which must be an argv sequence, without a shell.
+
+    Refusing a plain string keeps callers from re-introducing shell style
+    command strings built out of user input (CWE-78).
+    """
+    if isinstance(command, (str, bytes)):
+        raise TypeError('command must be an argv sequence, not a shell string')
+    process = subprocess.Popen(command, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return process.communicate()
-    
+
+
 
 @csrf_exempt
 def mitre_lab_17_api(request):
     if request.method == "POST":
-        ip = request.POST.get('ip')
-        command = "nmap " + ip 
+        try:
+            # Allowlist the untrusted target so it stays a single scan target.
+            ip = validate_target_host(request.POST.get('ip'))
+        except ValueError:
+            return JsonResponse(
+                {'raw_res': '', 'raw_err': 'Invalid IP address or hostname', 'ports': []},
+                status=400,
+            )
+        command = ["nmap", ip]
         res, err = command_out(command)
         res = res.decode()
         err = err.decode()

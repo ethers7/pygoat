@@ -1,11 +1,48 @@
 import hashlib
+import ipaddress
 import os
+import re
 import uuid
 
 from .models import *
 
+# Hostname label rules from RFC 1123: letters, digits and hyphens only, no
+# leading/trailing hyphen, 1-63 chars per label, 253 chars overall.
+_HOSTNAME_RE = re.compile(
+    r'^(?!-)[A-Za-z0-9-]{1,63}(?<!-)'
+    r'(?:\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?$'
+)
 
-# import re
+
+def validate_target_host(value):
+    """Validate an untrusted host so it is safe as a single argv element.
+
+    The command labs must still run their tool (``dig``, ``nslookup``,
+    ``nmap``) against user supplied input, so the input is allowlisted at the
+    trust boundary instead of being interpolated into a shell string
+    (CWE-78). Returns the normalised host and raises ``ValueError`` for
+    anything that is not a plausible hostname, IP address or CIDR range --
+    which also rejects values starting with ``-`` that the tool would
+    otherwise read as an extra command line option.
+    """
+    if not isinstance(value, str):
+        raise ValueError('not a valid hostname or IP address')
+    host = value.strip()
+    if not host or len(host) > 253 or host.startswith('-'):
+        raise ValueError('not a valid hostname or IP address')
+    try:
+        return str(ipaddress.ip_address(host))
+    except ValueError:
+        pass
+    try:
+        return str(ipaddress.ip_network(host, strict=False))
+    except ValueError:
+        pass
+    if _HOSTNAME_RE.match(host):
+        return host
+    raise ValueError('not a valid hostname or IP address')
+
+
 def ssrf_code_converter(code):
     list_input = code.split("\n")
     del_l = []
