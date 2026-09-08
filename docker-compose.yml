@@ -2,6 +2,11 @@ services:
   web:
     build: .
     command: gunicorn --bind 0.0.0.0:8000 --workers 6 pygoat.wsgi
+    environment:
+      # Signing key for the mitre/9 CSRF lab JWT cookie. Supply a random value
+      # from your own shell/secrets manager; it is deliberately not stored in
+      # this repository, and all workers must share the same value.
+      - CSRF_LAB_JWT_KEY=${CSRF_LAB_JWT_KEY}
     ports:
       - "8000:8000"
     volumes:

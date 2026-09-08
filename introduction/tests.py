@@ -1,11 +1,19 @@
+from hashlib import md5
 from unittest.mock import patch
 
+import jwt
 from django.contrib.auth.models import User
+from django.core.exceptions import ImproperlyConfigured
 from django.test import SimpleTestCase, TestCase, override_settings
 
-from .mitre import command_out
+from .mitre import command_out, csrf_lab_jwt_key
+from .models import CSRF_user_tbl
 from .models import login as login_row
 from .utility import validate_target_host
+
+# Test-only signing key for the CSRF lab. It is injected through settings so
+# that no JWT key literal is ever handed to jwt.encode()/jwt.decode() (CWE-522).
+TEST_CSRF_LAB_JWT_KEY = "unit-test-csrf-lab-signing-key"
 
 
 @override_settings(
@@ -160,3 +168,92 @@ class CommandLabArgvTests(TestCase):
     def test_command_out_refuses_shell_command_string(self):
         with self.assertRaises(TypeError):
             command_out("nmap 127.0.0.1")
+
+
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+    CSRF_LAB_JWT_KEY=TEST_CSRF_LAB_JWT_KEY,
+)
+class CsrfLabJwtKeyTests(TestCase):
+    """The CSRF lab must sign its cookie with a configured key, not a literal.
+
+    Guards introduction.mitre.csrf_lab_login / csrf_transfer_monei /
+    csrf_transfer_monei_api against a regression back to a hardcoded JWT
+    signing key in source (CWE-522).
+    """
+
+    PASSWORD = "Str0ng-Passw0rd!"
+    LAB_PASSWORD = "lab-password"
+    REMOVED_KEY = "csrf_vulneribility"
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="csrfuser",
+            email="csrfuser@example.com",
+            password=self.PASSWORD,
+        )
+        self.client.force_login(self.user)
+        CSRF_user_tbl.objects.create(
+            username="alice",
+            password=md5(self.LAB_PASSWORD.encode()).hexdigest(),
+            balance=100,
+        )
+        CSRF_user_tbl.objects.create(
+            username="bob",
+            password=md5(self.LAB_PASSWORD.encode()).hexdigest(),
+            balance=0,
+        )
+
+    def _issued_cookie(self):
+        r = self.client.post(
+            "/mitre/9/lab/login",
+            {"username": "alice", "password": self.LAB_PASSWORD},
+        )
+        self.assertEqual(r.status_code, 302)
+        return r.cookies["auth_cookiee"].value
+
+    def test_cookie_is_signed_with_configured_key(self):
+        payload = jwt.decode(
+            self._issued_cookie(),
+            TEST_CSRF_LAB_JWT_KEY,
+            algorithms=["HS256"],
+        )
+        self.assertEqual(payload["username"], "alice")
+
+    def test_cookie_is_not_signed_with_the_removed_literal(self):
+        with self.assertRaises(jwt.InvalidSignatureError):
+            jwt.decode(
+                self._issued_cookie(),
+                self.REMOVED_KEY,
+                algorithms=["HS256"],
+            )
+
+    def test_dashboard_still_accepts_a_freshly_issued_cookie(self):
+        self.client.cookies["auth_cookiee"] = self._issued_cookie()
+        r = self.client.get("/mitre/9/lab/transaction")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.context["balance"], 100)
+
+    def test_transfer_api_still_accepts_a_freshly_issued_cookie(self):
+        self.client.cookies["auth_cookiee"] = self._issued_cookie()
+        r = self.client.get("/mitre/9/lab/api/bob/10")
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(CSRF_user_tbl.objects.get(username="alice").balance, 90)
+        self.assertEqual(CSRF_user_tbl.objects.get(username="bob").balance, 10)
+
+    def test_dashboard_rejects_cookie_signed_with_the_removed_literal(self):
+        forged = jwt.encode(
+            {"username": "alice"},
+            self.REMOVED_KEY,
+            algorithm="HS256",
+        )
+        self.client.cookies["auth_cookiee"] = forged
+        r = self.client.get("/mitre/9/lab/transaction")
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(r.url, "/mitre/9/lab/login")
+
+    @override_settings(CSRF_LAB_JWT_KEY=None)
+    def test_missing_configuration_fails_closed(self):
+        with self.assertRaises(ImproperlyConfigured):
+            csrf_lab_jwt_key()
