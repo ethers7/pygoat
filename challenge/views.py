@@ -3,7 +3,7 @@ from django.shortcuts import redirect, render
 from django.views.generic import View
 from django.views.decorators.csrf import csrf_exempt
 import subprocess
-from .utility import get_free_port
+from .utility import get_free_port, validate_container_ref
 from .models import Challenge, UserChallenge
 # Create your views here.
 
@@ -77,8 +77,19 @@ class DoItFast(View):
 
         user_chal.is_live = False
         user_chal.save()
-        command = f"docker stop {user_chal.container_id}"
-        process = subprocess.Popen(command.split(" "), stdout=subprocess.PIPE)
+
+        try:
+            # Allowlist the stored reference before it becomes an argv element:
+            # it may only ever name one container, never an extra option or
+            # shell syntax.
+            container_ref = validate_container_ref(user_chal.container_id)
+        except ValueError:
+            return JsonResponse({'message': 'failed', 'status': '500'})
+
+        # Fixed argv list with shell=False: no shell and no space splitting, so
+        # the reference cannot smuggle in additional arguments.
+        command = ["docker", "stop", container_ref]
+        process = subprocess.Popen(command, shell=False, stdout=subprocess.PIPE)
         output, error = process.communicate()
         return JsonResponse({'message': 'success', 'status': '200'})
     
