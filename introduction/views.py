@@ -4,13 +4,12 @@ import hashlib
 import json
 import logging
 import os
-import pickle
 import random
 import re
 import string
 import subprocess
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from hashlib import md5
 from io import BytesIO
 from random import randint
@@ -200,19 +199,53 @@ def insec_des(request):
 @dataclass
 class TestUser:
     admin: int = 0
-pickled_user = pickle.dumps(TestUser())
-encoded_user = base64.b64encode(pickled_user)
+
+
+def encode_user(user):
+    """Serialize a TestUser into an opaque base64 token using JSON.
+
+    JSON carries plain data only, so producing and consuming this token never
+    executes code the way pickle does (CWE-502).
+    """
+    payload = json.dumps(asdict(user), separators=(',', ':')).encode('utf-8')
+    return base64.b64encode(payload).decode('utf-8')
+
+
+def decode_user(token):
+    """Decode a base64 JSON token into a TestUser, or None when it is invalid.
+
+    A tampered cookie can at worst carry different data - it can never lead to
+    remote code execution, and anything unexpected is rejected (fail closed).
+    """
+    try:
+        payload = base64.b64decode(token, validate=True)
+        data = json.loads(payload.decode('utf-8'))
+    except (ValueError, TypeError):
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    admin = data.get('admin', 0)
+    if isinstance(admin, bool) or not isinstance(admin, int):
+        return None
+
+    return TestUser(admin=admin)
+
+
+encoded_user = encode_user(TestUser())
 
 def insec_des_lab(request):
     if request.user.is_authenticated:
         response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Only Admins can see this page"})
         token = request.COOKIES.get('token')
         if token == None:
-            token = encoded_user
-            response.set_cookie(key='token',value=token.decode('utf-8'))
+            response.set_cookie(key='token',value=encoded_user)
         else:
-            token = base64.b64decode(token)
-            admin = pickle.loads(token)
+            admin = decode_user(token)
+            if admin is None:
+                # Malformed or tampered token: fail closed on the default page.
+                return response
             if admin.admin == 1:
                 response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Welcome Admin, SECRETKEY:ADMIN123"})
                 return response
@@ -565,7 +598,9 @@ def a9_lab(request):
             try :
                 file=request.FILES["file"]
                 try :
-                    data = yaml.load(file,yaml.Loader)
+                    # safe_load uses SafeLoader: plain YAML data still parses,
+                    # but python/object tags can no longer execute code.
+                    data = yaml.safe_load(file)
                     
                     return render(request,"Lab/A9/a9_lab.html",{"data":data})
                 except:

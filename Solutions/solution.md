@@ -280,9 +280,11 @@ To see results on screen, make sure your browser has JavaScript enabled.
 
 This Lab consists of a Page that has some content only available to for the admin to see, How can we access that page as admin? How is our role defined?
 
-If we check the cookie we see that it is base64 encoded, on decoding we realise it is pickle serialised and we can see some attributes, can you change the attributes to make the page readable?
+If we check the cookie we see that it is base64 encoded, on decoding we realise it is a serialised object and we can see some attributes, can you change the attributes to make the page readable?
 
-Try to flip the bit of the admin from ```...admin\x94K\x00... to ...admin\x94K\x00...```
+Try to flip the admin attribute from ```{"admin":0}``` to ```{"admin":1}``` and re-encode the cookie.
+
+Note: the app now decodes this token as plain data instead of calling ```pickle.loads()``` on it, so tampering can change the role shown by the lab but can no longer execute code (CWE-502).
 
 ## A9:Using Components with Know Vulnerability
 

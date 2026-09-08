@@ -1,15 +1,19 @@
+import base64
+import json
 from hashlib import md5
 from unittest.mock import patch
 
 import jwt
 from django.contrib.auth.models import User
 from django.core.exceptions import ImproperlyConfigured
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, TestCase, override_settings
 
 from .mitre import command_out, csrf_lab_jwt_key
 from .models import CSRF_user_tbl
 from .models import login as login_row
 from .utility import validate_target_host
+from .views import TestUser, encode_user
 
 # Test-only signing key for the CSRF lab. It is injected through settings so
 # that no JWT key literal is ever handed to jwt.encode()/jwt.decode() (CWE-522).
@@ -257,3 +261,100 @@ class CsrfLabJwtKeyTests(TestCase):
     def test_missing_configuration_fails_closed(self):
         with self.assertRaises(ImproperlyConfigured):
             csrf_lab_jwt_key()
+
+
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+)
+class DeserializationLabTests(TestCase):
+    """The deserialization labs must keep working without executing payloads.
+
+    Guards introduction.views.insec_des_lab against a regression back to
+    pickle.loads() on the 'token' cookie, and introduction.views.a9_lab
+    against a regression back to yaml.load() with the full Loader (CWE-502).
+    """
+
+    PASSWORD = "Str0ng-Passw0rd!"
+    NON_ADMIN_MESSAGE = "Only Admins can see this page"
+    ADMIN_MESSAGE = "Welcome Admin, SECRETKEY:ADMIN123"
+    # base64 of a pickle stream building introduction.views.TestUser(admin=1).
+    # Nothing unpickles it any more; a pickle regression would grant admin.
+    PICKLED_ADMIN_TOKEN = "gAJjaW50cm9kdWN0aW9uLnZpZXdzClRlc3RVc2VyCimBfVUFYWRtaW5LAXNiLg=="
+    # A python/object tag only the unsafe loaders honour.
+    YAML_PYTHON_TAG = b"!!python/object:introduction.views.TestUser {admin: 1}\n"
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="desuser",
+            email="desuser@example.com",
+            password=self.PASSWORD,
+        )
+        self.client.force_login(self.user)
+
+    @staticmethod
+    def _token(payload):
+        return base64.b64encode(json.dumps(payload).encode()).decode()
+
+    def test_first_visit_issues_a_json_data_token(self):
+        r = self.client.get("/insec_des_lab")
+        self.assertEqual(r.status_code, 200)
+        cookie = r.cookies["token"].value
+        self.assertEqual(json.loads(base64.b64decode(cookie).decode()), {"admin": 0})
+        self.assertEqual(r.context["message"], self.NON_ADMIN_MESSAGE)
+
+    def test_issued_token_round_trips_as_non_admin(self):
+        self.client.cookies["token"] = encode_user(TestUser())
+        r = self.client.get("/insec_des_lab")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.context["message"], self.NON_ADMIN_MESSAGE)
+
+    def test_admin_token_still_reveals_the_lab_secret(self):
+        self.client.cookies["token"] = self._token({"admin": 1})
+        r = self.client.get("/insec_des_lab")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.context["message"], self.ADMIN_MESSAGE)
+
+    def test_pickle_payload_is_not_deserialized(self):
+        self.client.cookies["token"] = self.PICKLED_ADMIN_TOKEN
+        r = self.client.get("/insec_des_lab")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.context["message"], self.NON_ADMIN_MESSAGE)
+
+    def test_malformed_tokens_fail_closed(self):
+        for value in (
+            "not-base64!!",
+            base64.b64encode(b"[]").decode(),
+            base64.b64encode(b"\xff\xfe not json").decode(),
+            self._token({"admin": "1"}),
+            self._token({"admin": True}),
+        ):
+            self.client.cookies["token"] = value
+            r = self.client.get("/insec_des_lab")
+            self.assertEqual(r.status_code, 200, msg=value)
+            self.assertEqual(r.context["message"], self.NON_ADMIN_MESSAGE, msg=value)
+
+    def test_a9_lab_still_converts_plain_yaml(self):
+        upload = SimpleUploadedFile(
+            "data.yaml",
+            b"name: pygoat\nversion: 1\n",
+            content_type="application/x-yaml",
+        )
+        r = self.client.post("/a9_lab", {"file": upload})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.context["data"], {"name": "pygoat", "version": 1})
+
+    def test_a9_lab_refuses_python_object_tags(self):
+        upload = SimpleUploadedFile(
+            "payload.yaml",
+            self.YAML_PYTHON_TAG,
+            content_type="application/x-yaml",
+        )
+        r = self.client.post("/a9_lab", {"file": upload})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.context["data"], "Error")
+
+    def test_a9_lab_without_a_file_still_asks_for_one(self):
+        r = self.client.post("/a9_lab", {})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.context["data"], "Please Upload a Yaml file.")
