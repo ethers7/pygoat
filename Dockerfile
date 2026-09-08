@@ -28,6 +28,15 @@ COPY . /app/
 EXPOSE 8000
 
 
-RUN python3 /app/manage.py migrate
+# Create an unprivileged user and give it ownership of the app directory so
+# migrations, the SQLite database and static files stay writable without root
+RUN groupadd --gid 1000 appuser \
+    && useradd --uid 1000 --gid appuser --create-home --shell /bin/sh appuser \
+    && python3 /app/manage.py migrate \
+    && chown -R appuser:appuser /app
 WORKDIR /app
+
+# Drop root privileges before running the application
+USER appuser
+
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers","6", "pygoat.wsgi"]
