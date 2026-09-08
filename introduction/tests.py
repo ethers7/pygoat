@@ -13,10 +13,11 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from requests.structures import CaseInsensitiveDict
 
 from .mitre import command_out, csrf_lab_jwt_key
+from .models import comments as comment_rows
 from .models import CSRF_user_tbl
 from .models import login as login_row
 from .utility import validate_outbound_url, validate_target_host
-from .views import SSRF_MAX_REDIRECTS, TestUser, encode_user
+from .views import SSRF_MAX_REDIRECTS, XXE_PARSE_ERROR, TestUser, encode_user
 
 # Test-only signing key for the CSRF lab. It is injected through settings so
 # that no JWT key literal is ever handed to jwt.encode()/jwt.decode() (CWE-522).
@@ -562,3 +563,72 @@ class DeserializationLabTests(TestCase):
         r = self.client.post("/a9_lab", {})
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.context["data"], "Please Upload a Yaml file.")
+
+
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+)
+class XxeLabDefusedParsingTests(TestCase):
+    """The XXE lab must still parse comments, with a parser that refuses entities.
+
+    Guards introduction.views.xxe_parse against a regression back to the native
+    xml.dom.pulldom / xml.sax parser with external general entities explicitly
+    switched on (CWE-611).
+    """
+
+    ORIGINAL_COMMENT = "comment stored before the lab request"
+    GOOD_XML = "<?xml version='1.0'?><comm><text>hello lab</text></comm>"
+    EXTERNAL_ENTITY_XML = (
+        "<?xml version='1.0'?>"
+        "<!DOCTYPE comm [<!ENTITY xxe SYSTEM 'file:///etc/passwd'>]>"
+        "<comm><text>&xxe;</text></comm>"
+    )
+    INTERNAL_ENTITY_XML = (
+        "<?xml version='1.0'?>"
+        "<!DOCTYPE comm [<!ENTITY a 'aa'><!ENTITY b '&a;&a;'>]>"
+        "<comm><text>&b;</text></comm>"
+    )
+
+    def setUp(self):
+        comment_rows.objects.create(
+            id=1,
+            name="System",
+            comment=self.ORIGINAL_COMMENT,
+        )
+
+    def _post(self, body):
+        return self.client.post("/xxe_parse", data=body, content_type="text/xml")
+
+    def _stored_comment(self):
+        return comment_rows.objects.get(id=1).comment
+
+    def test_well_formed_comment_is_still_parsed_and_stored(self):
+        r = self._post(self.GOOD_XML)
+        self.assertEqual(r.status_code, 200)
+        self.assertIsNone(r.context.get("error"))
+        self.assertEqual(self._stored_comment(), "hello lab")
+
+    def test_external_entity_payload_is_refused(self):
+        r = self._post(self.EXTERNAL_ENTITY_XML)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.context["error"], XXE_PARSE_ERROR)
+        self.assertEqual(self._stored_comment(), self.ORIGINAL_COMMENT)
+
+    def test_internal_entity_declaration_is_refused(self):
+        r = self._post(self.INTERNAL_ENTITY_XML)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.context["error"], XXE_PARSE_ERROR)
+        self.assertEqual(self._stored_comment(), self.ORIGINAL_COMMENT)
+
+    def test_malformed_document_fails_closed(self):
+        r = self._post("<comm><text>never closed")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.context["error"], XXE_PARSE_ERROR)
+        self.assertEqual(self._stored_comment(), self.ORIGINAL_COMMENT)
+
+    def test_document_without_a_text_element_fails_closed(self):
+        r = self._post("<?xml version='1.0'?><comm><other>x</other></comm>")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.context["error"], XXE_PARSE_ERROR)
+        self.assertEqual(self._stored_comment(), self.ORIGINAL_COMMENT)
