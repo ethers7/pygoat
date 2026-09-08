@@ -11,6 +11,9 @@
 
     <img class="img" src="{% static 'Lab/image/xxe.jpg' %}"><br><br>
 
+    {% if error %}
+    <div class="alert alert-danger" role="alert">{{ error }}</div>
+    {% endif %}
 
     <form name="ajax" onsubmit="SendToServer()">
         <label for="comment">Comment Your Thoughts:</label>

@@ -1,10 +1,10 @@
 # Insecure Deserialization Lab
 
-A vulnerable web application demonstrating insecure deserialization vulnerabilities in Python using pickle.
+A vulnerable web application demonstrating serialized-token tampering (OWASP insecure deserialization) in Python.
 
 ## Description
 
-This lab demonstrates the dangers of insecure deserialization by implementing a vulnerable user session mechanism that uses Python's pickle module. The application allows users to:
+This lab demonstrates the dangers of trusting client-supplied serialized data by implementing a vulnerable user session mechanism built on an unsigned, base64 encoded JSON token. The application allows users to:
 
 1. Create a regular user account
 2. Receive a serialized token
@@ -13,8 +13,8 @@ This lab demonstrates the dangers of insecure deserialization by implementing a 
 
 ## Features
 
-- Vulnerable pickle deserialization
-- Base64 encoded serialized data
+- Tamperable, unsigned user token
+- Base64 encoded JSON serialized data
 - User role system (regular user vs admin)
 - Docker containerization
 - Light/Dark theme support
@@ -72,11 +72,14 @@ insec_des_lab/
 
 ## Vulnerability Details
 
-The lab uses Python's pickle module for serialization/deserialization of user data. The vulnerability exists because:
+The lab uses a base64 encoded JSON token to carry user data. The remaining (data tampering) vulnerability exists because:
 
-1. The application trusts user-provided serialized data
-2. Uses pickle.loads() without validation
-3. The User class has a vulnerable __reduce__ method
+1. The application trusts the role attribute inside a user-provided token
+2. The token is not integrity protected (no signature)
+
+Note: the deserialization step itself is no longer code-execution prone. Tokens are parsed as JSON, which only
+carries primitive data types, and every field is type checked before a User is built. Never use pickle for
+user-controlled data.
 
 ## Exploitation Steps
 

@@ -169,4 +169,12 @@ SOCIALACCOUNT_PROVIDERS = {
 }
 
 SECRET_COOKIE_KEY = "PYGOAT"
+
+# Signing key for the CSRF lab (mitre/9) JWT session cookie. It is read from
+# the environment so the key is configuration instead of an Insufficiently
+# Protected Credential committed to this repository (CWE-522), e.g.
+#   export CSRF_LAB_JWT_KEY="$(python -c 'import secrets;print(secrets.token_urlsafe(32))')"
+# There is deliberately no in-source default: when it is unset the lab fails
+# closed rather than signing tokens anybody with the repo could forge.
+CSRF_LAB_JWT_KEY = os.environ.get('CSRF_LAB_JWT_KEY')
 CSRF_TRUSTED_ORIGINS = ["http://127.0.0.1:8000","http://0.0.0.0:8000","http://172.16.189.10"]

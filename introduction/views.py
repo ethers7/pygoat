@@ -4,24 +4,23 @@ import hashlib
 import json
 import logging
 import os
-import pickle
 import random
 import re
 import string
 import subprocess
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from urllib.parse import urljoin
 from hashlib import md5
 from io import BytesIO
 from random import randint
-from xml.dom.pulldom import START_ELEMENT, parseString
-from xml.sax import make_parser
-from xml.sax.handler import feature_external_ges
 
 import jwt
 import requests
 import yaml
 from argon2 import PasswordHasher
+from defusedxml.common import DefusedXmlException
+from defusedxml.ElementTree import fromstring as parse_xml
 from django.contrib import messages
 from django.contrib.auth import authenticate, login
 from django.contrib.auth.forms import UserCreationForm
@@ -37,7 +36,9 @@ from requests.structures import CaseInsensitiveDict
 from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
-from .utility import customHash, filter_blog
+from .utility import (ArithmeticExpressionError, customHash,
+                      evaluate_arithmetic, filter_blog, validate_outbound_url,
+                      validate_target_host)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -155,11 +156,12 @@ def sql_lab(request):
 
             if login.objects.filter(user=name):
 
-                sql_query = "SELECT * FROM introduction_login WHERE user='"+name+"' AND password='"+password+"'"
+                sql_query = "SELECT * FROM introduction_login WHERE user=%s AND password=%s"
+                sql_params = [name, password]
                 print(sql_query)
                 try:
                     print("\nin try\n")
-                    val=login.objects.raw(sql_query)
+                    val=login.objects.raw(sql_query, sql_params)
                 except:
                     print("\nin except\n")
                     return render(
@@ -199,19 +201,53 @@ def insec_des(request):
 @dataclass
 class TestUser:
     admin: int = 0
-pickled_user = pickle.dumps(TestUser())
-encoded_user = base64.b64encode(pickled_user)
+
+
+def encode_user(user):
+    """Serialize a TestUser into an opaque base64 token using JSON.
+
+    JSON carries plain data only, so producing and consuming this token never
+    executes code the way pickle does (CWE-502).
+    """
+    payload = json.dumps(asdict(user), separators=(',', ':')).encode('utf-8')
+    return base64.b64encode(payload).decode('utf-8')
+
+
+def decode_user(token):
+    """Decode a base64 JSON token into a TestUser, or None when it is invalid.
+
+    A tampered cookie can at worst carry different data - it can never lead to
+    remote code execution, and anything unexpected is rejected (fail closed).
+    """
+    try:
+        payload = base64.b64decode(token, validate=True)
+        data = json.loads(payload.decode('utf-8'))
+    except (ValueError, TypeError):
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    admin = data.get('admin', 0)
+    if isinstance(admin, bool) or not isinstance(admin, int):
+        return None
+
+    return TestUser(admin=admin)
+
+
+encoded_user = encode_user(TestUser())
 
 def insec_des_lab(request):
     if request.user.is_authenticated:
         response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Only Admins can see this page"})
         token = request.COOKIES.get('token')
         if token == None:
-            token = encoded_user
-            response.set_cookie(key='token',value=token.decode('utf-8'))
+            response.set_cookie(key='token',value=encoded_user)
         else:
-            token = base64.b64decode(token)
-            admin = pickle.loads(token)
+            admin = decode_user(token)
+            if admin is None:
+                # Malformed or tampered token: fail closed on the default page.
+                return response
             if admin.admin == 1:
                 response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Welcome Admin, SECRETKEY:ADMIN123"})
                 return response
@@ -221,6 +257,9 @@ def insec_des_lab(request):
         return redirect('login')
 
 #****************************************************XXE********************************************************#
+
+# Shown when the hardened parser refuses the submitted document.
+XXE_PARSE_ERROR = "Invalid XML: doctypes and external entities are not allowed"
 
 
 def xxe(request):
@@ -254,18 +293,29 @@ def xxe_see(request):
 
 @csrf_exempt
 def xxe_parse(request):
+    # The comment is parsed with defusedxml instead of the native XML libraries:
+    # doctype declarations, external entities and entity expansion are refused,
+    # so an XXE payload can no longer read local files or reach the network
+    # (CWE-611). Anything the parser rejects fails closed on the error path
+    # below instead of raising an unhandled error.
+    try:
+        root = parse_xml(
+            request.body.decode('utf-8'),
+            forbid_dtd=True,
+            forbid_entities=True,
+            forbid_external=True,
+        )
+    except (DefusedXmlException, SyntaxError, UnicodeDecodeError):
+        # defusedxml's refusals derive from ValueError, ElementTree's
+        # ParseError from SyntaxError; neither must leak the payload back.
+        return render(request, 'Lab/XXE/xxe_lab.html', {"error": XXE_PARSE_ERROR})
 
-    parser = make_parser()
-    parser.setFeature(feature_external_ges, True)
-    doc = parseString(request.body.decode('utf-8'), parser=parser)
-    for event, node in doc:
-        if event == START_ELEMENT and node.tagName == 'text':
-            doc.expandNode(node)
-            text = node.toxml()
-    startInd = text.find('>')
-    endInd = text.find('<', startInd)
-    text = text[startInd + 1:endInd:]
-    p=comments.objects.filter(id=1).update(comment=text)
+    node = root if root.tag == 'text' else root.find('.//text')
+    if node is None:
+        return render(request, 'Lab/XXE/xxe_lab.html', {"error": XXE_PARSE_ERROR})
+
+    text = node.text or ''
+    comments.objects.filter(id=1).update(comment=text)
 
     return render(request, 'Lab/XXE/xxe_lab.html')
 
@@ -418,19 +468,26 @@ def cmd_lab(request):
             domain=request.POST.get('domain')
             # Remove all common protocols (case-insensitive) and www prefix
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
+            try:
+                # Allowlist the untrusted host: it may only ever be one lookup
+                # target, never an extra flag, a path or shell metacharacters.
+                domain = validate_target_host(domain)
+            except ValueError:
+                output = "Invalid domain name"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             os=request.POST.get('os')
             print(os)
             if(os=='win'):
-                command="nslookup {}".format(domain)
+                command=["nslookup", domain]
             else:
-                command = "dig {}".format(domain)
-            
+                command = ["dig", domain]
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
+                # argv list with shell=False: no shell parses the input.
                 process = subprocess.Popen(
                     command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
+                    shell=False,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
                 data = stdout.decode('utf-8')
@@ -457,8 +514,11 @@ def cmd_lab2(request):
             
             print(val)
             try:
-                output = eval(val)
-            except:
+                # The calculator still evaluates the user's arithmetic, but
+                # through an allowlisted AST walker instead of eval() so the
+                # input can never be executed as python (CWE-95).
+                output = evaluate_arithmetic(val)
+            except ArithmeticExpressionError:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab2.html',{"output":output})
             print("Output = ", output)
@@ -557,7 +617,9 @@ def a9_lab(request):
             try :
                 file=request.FILES["file"]
                 try :
-                    data = yaml.load(file,yaml.Loader)
+                    # safe_load uses SafeLoader: plain YAML data still parses,
+                    # but python/object tags can no longer execute code.
+                    data = yaml.safe_load(file)
                     
                     return render(request,"Lab/A9/a9_lab.html",{"data":data})
                 except:
@@ -861,7 +923,8 @@ def injection_sql_lab(request):
         print(password)
 
         if name:
-            sql_query = "SELECT * FROM introduction_sql_lab_table WHERE id='"+name+"'AND password='"+password+"'"
+            sql_query = "SELECT * FROM introduction_sql_lab_table WHERE id=%s AND password=%s"
+            sql_params = [name, password]
 
             sql_instance = sql_lab_table(id="admin", password="65079b006e85a7e798abecb99e47c154")
             sql_instance.save()
@@ -875,7 +938,7 @@ def injection_sql_lab(request):
             print(sql_query)
 
             try:
-                user = sql_lab_table.objects.raw(sql_query)
+                user = sql_lab_table.objects.raw(sql_query, sql_params)
                 user = user[0].id
                 print(user)
 
@@ -908,6 +971,13 @@ def injection_sql_lab(request):
 ##----------------------------------------------------------------------------------------------------------
 
 #*********************************************************SSRF*************************************************#
+
+# Bounds for the outbound fetch of the SSRF lab: redirects are followed by hand
+# so each hop can be re-validated, and a timeout keeps the request from hanging.
+SSRF_REDIRECT_CODES = (301, 302, 303, 307, 308)
+SSRF_MAX_REDIRECTS = 3
+SSRF_TIMEOUT = 10
+
 
 def ssrf(request):
     if request.user.is_authenticated:
@@ -960,9 +1030,23 @@ def ssrf_lab2(request):
     elif request.method == "POST":
         url = request.POST["url"]
         try:
-            response = requests.get(url)
+            # Allowlist the scheme and the resolved destination before the
+            # server fetches anything, and re-validate every redirect hop so a
+            # public URL cannot bounce us into loopback, link-local (cloud
+            # metadata) or private ranges (CWE-918).
+            target = validate_outbound_url(url)
+            for _ in range(SSRF_MAX_REDIRECTS + 1):
+                response = requests.get(target, allow_redirects=False, timeout=SSRF_TIMEOUT)
+                location = response.headers.get("location")
+                if response.status_code not in SSRF_REDIRECT_CODES or not location:
+                    break
+                target = validate_outbound_url(urljoin(target, location))
+            else:
+                return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Too many redirects"})
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+        except ValueError as blocked:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": f"Invalid URL: {blocked}"})
+        except requests.RequestException:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 

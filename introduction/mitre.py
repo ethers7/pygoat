@@ -4,11 +4,15 @@ import subprocess
 from hashlib import md5
 
 import jwt
+from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
 from django.views.decorators.csrf import csrf_exempt
 
 from .models import CSRF_user_tbl
+from .utility import (ArithmeticExpressionError, evaluate_arithmetic,
+                      validate_target_host)
 from .views import authentication_decorator
 
 # import os
@@ -151,6 +155,25 @@ def mitre_top25(request):
     if request.method == 'GET':
         return render(request, 'mitre/mitre_top25.html')
 
+def csrf_lab_jwt_key():
+    """Return the signing key for the CSRF lab's ``auth_cookiee`` token.
+
+    The key that signs and verifies the lab session cookie is configuration,
+    not source code: it comes from ``settings.CSRF_LAB_JWT_KEY``, which is
+    loaded from the ``CSRF_LAB_JWT_KEY`` environment variable. Keeping it out
+    of the repository stops anyone with a checkout from forging tokens
+    (CWE-522). There is no hardcoded fallback, so an unconfigured deployment
+    fails closed instead of trusting a publicly known key.
+    """
+    key = getattr(settings, 'CSRF_LAB_JWT_KEY', None)
+    if not key:
+        raise ImproperlyConfigured(
+            'CSRF_LAB_JWT_KEY is not configured: set the CSRF_LAB_JWT_KEY '
+            'environment variable to a random secret to enable the CSRF lab.'
+        )
+    return key
+
+
 @authentication_decorator
 def csrf_lab_login(request):
     if request.method == 'GET':
@@ -166,7 +189,7 @@ def csrf_lab_login(request):
                 'exp': datetime.datetime.utcnow() + datetime.timedelta(seconds=300),
                 'iat': datetime.datetime.utcnow()
             }
-            cookie = jwt.encode(payload, 'csrf_vulneribility', algorithm='HS256')
+            cookie = jwt.encode(payload, csrf_lab_jwt_key(), algorithm='HS256')
             response = redirect("/mitre/9/lab/transaction")
             response.set_cookie('auth_cookiee', cookie)
             return response
@@ -179,7 +202,7 @@ def csrf_transfer_monei(request):
     if request.method == 'GET':
         try:
             cookie = request.COOKIES['auth_cookiee']
-            payload = jwt.decode(cookie, 'csrf_vulneribility', algorithms=['HS256'])
+            payload = jwt.decode(cookie, csrf_lab_jwt_key(), algorithms=['HS256'])
             username = payload['username']
             User = CSRF_user_tbl.objects.filter(username=username)
             if not User:
@@ -191,7 +214,7 @@ def csrf_transfer_monei(request):
 def csrf_transfer_monei_api(request,recipent,amount):
     if request.method == "GET":
         cookie = request.COOKIES['auth_cookiee']
-        payload = jwt.decode(cookie, 'csrf_vulneribility', algorithms=['HS256'])
+        payload = jwt.decode(cookie, csrf_lab_jwt_key(), algorithms=['HS256'])
         username = payload['username']
         User = CSRF_user_tbl.objects.filter(username=username)
         if not User:
@@ -215,7 +238,13 @@ def csrf_transfer_monei_api(request,recipent,amount):
 def mitre_lab_25_api(request):
     if request.method == "POST":
         expression = request.POST.get('expression')
-        result = eval(expression)
+        try:
+            # Same shared allowlisted evaluator as the cmd_lab2 calculator:
+            # the expression is parsed and walked, never executed (CWE-95).
+            result = evaluate_arithmetic(expression)
+        except ArithmeticExpressionError:
+            # Fail closed on the shape the lab page's JS already reads.
+            return JsonResponse({'result': 'Invalid expression'}, status=400)
         return JsonResponse({'result': result})
     else:
         return redirect('/mitre/25/lab/')
@@ -230,15 +259,30 @@ def mitre_lab_17(request):
     return render(request, 'mitre/mitre_lab_17.html')
 
 def command_out(command):
-    process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    """Run ``command``, which must be an argv sequence, without a shell.
+
+    Refusing a plain string keeps callers from re-introducing shell style
+    command strings built out of user input (CWE-78).
+    """
+    if isinstance(command, (str, bytes)):
+        raise TypeError('command must be an argv sequence, not a shell string')
+    process = subprocess.Popen(command, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return process.communicate()
-    
+
+
 
 @csrf_exempt
 def mitre_lab_17_api(request):
     if request.method == "POST":
-        ip = request.POST.get('ip')
-        command = "nmap " + ip 
+        try:
+            # Allowlist the untrusted target so it stays a single scan target.
+            ip = validate_target_host(request.POST.get('ip'))
+        except ValueError:
+            return JsonResponse(
+                {'raw_res': '', 'raw_err': 'Invalid IP address or hostname', 'ports': []},
+                status=400,
+            )
+        command = ["nmap", ip]
         res, err = command_out(command)
         res = res.decode()
         err = err.decode()

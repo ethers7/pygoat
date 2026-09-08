@@ -10,15 +10,29 @@ event2 = function(){
     document.getElementById("a9_d2").style.display = 'flex';
 }
 
+// Reads the CSRF token cookie set by the server for the current browser
+// session. Never hardcode captured session/CSRF/JWT values in client-side
+// source: they are shipped to every visitor.
+// SECURITY: the CSRF token and JWT that used to be hardcoded here (and in
+// a7.js) remain in git history and MUST be rotated/revoked server-side.
+getCsrfTokenFromCookie = function(){
+    var match = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]*)/);
+    return match ? decodeURIComponent(match[1]) : "";
+}
+
 event3 = function(){
     var log_code = document.getElementById('a9_log').value
     var target_code = document.getElementById('a9_api').value
 
+    // Use the live CSRF token from this session's cookie, and let the browser
+    // attach its own session/jwt cookies via credentials: 'same-origin'.
+    var csrftoken = getCsrfTokenFromCookie();
+
     var myHeaders = new Headers();
-    myHeaders.append("Cookie", "csrftoken=5fVOTXh2HNahtvJFJNRSrKkwPAgPM9YCHlrCGprAxhAAKOUWMxqMnWm8BUomv0Yd; jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MSwiZXhwIjoxNjUzMzEzMDIxLCJpYXQiOjE2NTMzMDk0MjF9.dh2gfP9wKD8GKu1J-jVs2jJUYMgKu_kMaJjrD0hHP-I");
+    myHeaders.append("X-CSRFToken", csrftoken);
 
     var formdata = new FormData();
-    formdata.append("csrfmiddlewaretoken", "5fVOTXh2HNahtvJFJNRSrKkwPAgPM9YCHlrCGprAxhAAKOUWMxqMnWm8BUomv0Yd");
+    formdata.append("csrfmiddlewaretoken", csrftoken);
     formdata.append("log_code", log_code);
     formdata.append("api_code", target_code);
 
@@ -26,6 +40,7 @@ event3 = function(){
     method: 'POST',
     headers: myHeaders,
     body: formdata,
+    credentials: 'same-origin',
     redirect: 'follow'
     };
 
