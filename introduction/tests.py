@@ -16,7 +16,8 @@ from .mitre import command_out, csrf_lab_jwt_key
 from .models import comments as comment_rows
 from .models import CSRF_user_tbl
 from .models import login as login_row
-from .utility import validate_outbound_url, validate_target_host
+from .utility import (ArithmeticExpressionError, evaluate_arithmetic,
+                      validate_outbound_url, validate_target_host)
 from .views import SSRF_MAX_REDIRECTS, XXE_PARSE_ERROR, TestUser, encode_user
 
 # Test-only signing key for the CSRF lab. It is injected through settings so
@@ -179,6 +180,119 @@ class OutboundUrlValidationTests(SimpleTestCase):
         ):
             with self.assertRaises(ValueError, msg=value):
                 validate_outbound_url(value)
+
+
+class ArithmeticEvaluatorTests(SimpleTestCase):
+    """Guards introduction.utility.evaluate_arithmetic (CWE-95 allowlist)."""
+
+    def test_still_evaluates_plain_arithmetic(self):
+        for value, expected in (
+            ("7*7", 49),
+            (" 1 + 2 * 3 ", 7),
+            ("(1+2)*3", 9),
+            ("-4", -4),
+            ("+4", 4),
+            ("7 - -7", 14),
+            ("7/2", 3.5),
+            ("7//2", 3),
+            ("7%2", 1),
+            ("2**10", 1024),
+            ("1.5*2", 3.0),
+        ):
+            self.assertEqual(evaluate_arithmetic(value), expected, msg=value)
+
+    def test_rejects_code_execution_payloads(self):
+        for value in (
+            "__import__('os').system('id')",
+            "os.system('id')",
+            "open('/etc/passwd').read()",
+            "().__class__.__bases__[0].__subclasses__()",
+            "print(1)",
+            "eval('1+1')",
+            "[x for x in range(3)]",
+            "lambda: 1",
+            "1 if True else 2",
+            "'a'*3",
+            "f'{1}'",
+            "1 == 1",
+            "True",
+            "None",
+            "x",
+            "1;2",
+            "import os",
+            "1+",
+            "",
+            "   ",
+            None,
+            b"7*7",
+            "1" * 500,
+        ):
+            with self.assertRaises(ArithmeticExpressionError, msg=repr(value)):
+                evaluate_arithmetic(value)
+
+    def test_rejects_resource_exhausting_powers(self):
+        for value in ("9**9**9", "2**100000", "10**7**7"):
+            with self.assertRaises(ArithmeticExpressionError, msg=value):
+                evaluate_arithmetic(value)
+
+    def test_arithmetic_errors_fail_closed(self):
+        for value in ("1/0", "1//0", "1%0"):
+            with self.assertRaises(ArithmeticExpressionError, msg=value):
+                evaluate_arithmetic(value)
+
+
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+)
+class CalculatorLabTests(TestCase):
+    """The calculator labs must keep calculating, without eval().
+
+    Guards introduction.views.cmd_lab2 and introduction.mitre.mitre_lab_25_api
+    against a regression back to eval() on request.POST (CWE-95).
+    """
+
+    PASSWORD = "Str0ng-Passw0rd!"
+    ERROR_OUTPUT = "Something went wrong"
+    PAYLOAD = "__import__('os').system('id')"
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="calcuser",
+            email="calcuser@example.com",
+            password=self.PASSWORD,
+        )
+        self.client.force_login(self.user)
+
+    def test_cmd_lab2_still_calculates(self):
+        r = self.client.post("/cmd_lab2", {"val": "7*7"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.context["output"], 49)
+
+    def test_cmd_lab2_refuses_code_execution_payload(self):
+        r = self.client.post("/cmd_lab2", {"val": self.PAYLOAD})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.context["output"], self.ERROR_OUTPUT)
+
+    def test_cmd_lab2_missing_value_fails_closed(self):
+        r = self.client.post("/cmd_lab2", {})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.context["output"], self.ERROR_OUTPUT)
+
+    def test_mitre_lab_25_api_still_calculates(self):
+        r = self.client.post("/mitre/25/lab/api", {"expression": "7*7"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["result"], 49)
+
+    def test_mitre_lab_25_api_refuses_code_execution_payload(self):
+        r = self.client.post("/mitre/25/lab/api", {"expression": self.PAYLOAD})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["result"], "Invalid expression")
+
+    def test_mitre_lab_25_api_missing_expression_fails_closed(self):
+        r = self.client.post("/mitre/25/lab/api", {})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["result"], "Invalid expression")
 
 
 class _FakeResponse:

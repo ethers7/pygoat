@@ -11,7 +11,8 @@ from django.shortcuts import redirect, render
 from django.views.decorators.csrf import csrf_exempt
 
 from .models import CSRF_user_tbl
-from .utility import validate_target_host
+from .utility import (ArithmeticExpressionError, evaluate_arithmetic,
+                      validate_target_host)
 from .views import authentication_decorator
 
 # import os
@@ -237,7 +238,13 @@ def csrf_transfer_monei_api(request,recipent,amount):
 def mitre_lab_25_api(request):
     if request.method == "POST":
         expression = request.POST.get('expression')
-        result = eval(expression)
+        try:
+            # Same shared allowlisted evaluator as the cmd_lab2 calculator:
+            # the expression is parsed and walked, never executed (CWE-95).
+            result = evaluate_arithmetic(expression)
+        except ArithmeticExpressionError:
+            # Fail closed on the shape the lab page's JS already reads.
+            return JsonResponse({'result': 'Invalid expression'}, status=400)
         return JsonResponse({'result': result})
     else:
         return redirect('/mitre/25/lab/')

@@ -36,7 +36,8 @@ from requests.structures import CaseInsensitiveDict
 from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
-from .utility import (customHash, filter_blog, validate_outbound_url,
+from .utility import (ArithmeticExpressionError, customHash,
+                      evaluate_arithmetic, filter_blog, validate_outbound_url,
                       validate_target_host)
 
 #*****************************************Lab Requirements****************************************************#
@@ -513,8 +514,11 @@ def cmd_lab2(request):
             
             print(val)
             try:
-                output = eval(val)
-            except:
+                # The calculator still evaluates the user's arithmetic, but
+                # through an allowlisted AST walker instead of eval() so the
+                # input can never be executed as python (CWE-95).
+                output = evaluate_arithmetic(val)
+            except ArithmeticExpressionError:
                 output = "Something went wrong"
                 return render(request,'Lab/CMD/cmd_lab2.html',{"output":output})
             print("Output = ", output)

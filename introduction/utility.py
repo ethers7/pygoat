@@ -1,5 +1,7 @@
+import ast
 import hashlib
 import ipaddress
+import operator
 import os
 import re
 import socket
@@ -106,6 +108,96 @@ def validate_outbound_url(value):
     return urlunsplit(
         (parts.scheme.lower(), parts.netloc, parts.path, parts.query, '')
     )
+
+
+class ArithmeticExpressionError(ValueError):
+    """Raised when input is not a plain, safe arithmetic expression."""
+
+
+# 9**9**9 is a valid arithmetic expression that would pin a worker for hours
+# and exhaust memory, so exponentiation is bounded (CWE-400).
+_MAX_POW_BASE = 10 ** 6
+_MAX_POW_EXPONENT = 100
+# A legitimate calculator entry is short; a huge chain of operators is only
+# ever an attempt to burn CPU in the parser.
+_MAX_EXPRESSION_LENGTH = 200
+
+
+def _safe_pow(base, exponent):
+    if abs(base) > _MAX_POW_BASE or abs(exponent) > _MAX_POW_EXPONENT:
+        raise ArithmeticExpressionError('numbers are too large')
+    return operator.pow(base, exponent)
+
+
+# The calculator labs only ever need numbers and these operators. Handing the
+# input to eval()/exec() instead turns the calculator into arbitrary code
+# execution (CWE-95), so the parsed tree is walked and every node that is not
+# in this allowlist -- names, attributes, calls, subscripts, comparisons,
+# comprehensions, lambdas, walrus, f-strings, ... -- is refused.
+_SAFE_BINARY_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: _safe_pow,
+}
+_SAFE_UNARY_OPS = {
+    ast.UAdd: operator.pos,
+    ast.USub: operator.neg,
+}
+
+
+def _safe_number(value):
+    # bool is a subclass of int, but True/False are not calculator input.
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ArithmeticExpressionError('only numbers are allowed')
+    return value
+
+
+def _eval_node(node):
+    """Evaluate one allowlisted node of an arithmetic expression tree."""
+    if isinstance(node, ast.Constant):
+        return _safe_number(node.value)
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _SAFE_UNARY_OPS:
+        return _SAFE_UNARY_OPS[type(node.op)](_eval_node(node.operand))
+    if isinstance(node, ast.BinOp) and type(node.op) in _SAFE_BINARY_OPS:
+        return _SAFE_BINARY_OPS[type(node.op)](
+            _eval_node(node.left), _eval_node(node.right)
+        )
+    raise ArithmeticExpressionError('unsupported expression')
+
+
+def evaluate_arithmetic(expression):
+    """Evaluate an untrusted arithmetic expression without eval/exec/compile.
+
+    The calculator labs must keep answering ``7*7``, so the expression is
+    parsed with ``ast.parse(mode='eval')`` and the resulting tree is walked
+    with an allowlist of numeric constants, unary ``+``/``-`` and the binary
+    ``+ - * / // % **`` operators. Nothing is ever executed and no name,
+    attribute or call can be reached, so the classic ``eval`` payloads
+    (``__import__('os').system(...)``) are rejected instead of run.
+
+    Returns the numeric result and raises ``ArithmeticExpressionError`` for
+    anything rejected -- including division by zero and oversized powers --
+    so callers can fail closed on their existing error path.
+    """
+    if not isinstance(expression, str):
+        raise ArithmeticExpressionError('not an arithmetic expression')
+    text = expression.strip()
+    if not text or len(text) > _MAX_EXPRESSION_LENGTH:
+        raise ArithmeticExpressionError('not an arithmetic expression')
+    try:
+        tree = ast.parse(text, mode='eval')
+    except (SyntaxError, ValueError, MemoryError, RecursionError):
+        raise ArithmeticExpressionError('not an arithmetic expression')
+    try:
+        return _safe_number(_eval_node(tree.body))
+    except ArithmeticExpressionError:
+        raise
+    except (ArithmeticError, TypeError, ValueError, RecursionError):
+        raise ArithmeticExpressionError('expression could not be evaluated')
 
 
 def ssrf_code_converter(code):
