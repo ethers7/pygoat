@@ -30,7 +30,9 @@
         </button>
 
     </div>
-    <div id="a9_d2" style="display:none;flex-direction: column;align-items: center;"> 
+    <div id="a9_d2" style="display:none;flex-direction: column;align-items: center;">
+        {# Server-rendered per-session CSRF token, read at runtime by a9.js #}
+        {% csrf_token %}
         <br>
         <div id="textarea-container">
             <div id="textarea1">
