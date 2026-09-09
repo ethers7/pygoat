@@ -10,7 +10,7 @@ from django.shortcuts import redirect, render
 from django.views.decorators.csrf import csrf_exempt
 
 from .models import CSRF_user_tbl
-from .utility import safe_lookup_target
+from .utility import safe_eval_arithmetic, safe_lookup_target
 from .views import authentication_decorator
 
 # import os
@@ -219,7 +219,14 @@ def csrf_transfer_monei_api(request,recipent,amount):
 def mitre_lab_25_api(request):
     if request.method == "POST":
         expression = request.POST.get('expression')
-        result = eval(expression)
+        try:
+            # Restricted arithmetic evaluator: the submitted expression is
+            # parsed and interpreted over an allowlist of numbers and
+            # operators, never executed as Python code.
+            result = safe_eval_arithmetic(expression)
+        except ValueError as error:
+            message = 'Expression rejected: %s' % error
+            return JsonResponse({'result': message, 'error': message}, status=400)
         return JsonResponse({'result': result})
     else:
         return redirect('/mitre/25/lab/')

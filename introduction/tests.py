@@ -5,7 +5,8 @@ from django.contrib.auth.models import User
 from django.test import SimpleTestCase, TestCase
 
 from .models import comments
-from .utility import safe_outbound_url, safe_parse_comment_xml
+from .utility import (safe_eval_arithmetic, safe_outbound_url,
+                      safe_parse_comment_xml)
 
 # A publicly routable literal used as an allowlisted destination so the tests
 # never depend on DNS resolution.
@@ -198,3 +199,125 @@ class XxeParseViewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, "Comment rejected")
+
+
+# Payloads that reach arbitrary code execution when an expression is handed to
+# eval()/exec() (CWE-95).
+CODE_INJECTION_PAYLOADS = (
+    "__import__('os').popen('id').read()",
+    "__import__('subprocess').check_output(['id'])",
+    "().__class__.__bases__[0].__subclasses__()",
+    "open('/etc/passwd').read()",
+    "eval('1+1')",
+    "globals()",
+    "[x for x in range(3)]",
+    "'a'*10",
+    "f'{7*7}'",
+    "1 if print('side effect') else 2",
+    "lambda: 1",
+    "7*7 ; 8*8",
+)
+
+
+class SafeEvalArithmeticTests(SimpleTestCase):
+    """Regression tests for the restricted expression evaluator (CWE-95)."""
+
+    def test_evaluates_allowed_arithmetic(self):
+        for expression, expected in (
+                ("7*7", 49),
+                (" 1 + 2 * 3 ", 7),
+                ("(4 + 6) / 4", 2.5),
+                ("7 // 2", 3),
+                ("7 % 4", 3),
+                ("2 ** 10", 1024),
+                ("-5 + +3", -2),
+                ("1.5 * 2", 3.0)):
+            with self.subTest(expression=expression):
+                self.assertEqual(safe_eval_arithmetic(expression), expected)
+
+    def test_rejects_code_execution_payloads(self):
+        for expression in CODE_INJECTION_PAYLOADS:
+            with self.subTest(expression=expression):
+                with self.assertRaises(ValueError):
+                    safe_eval_arithmetic(expression)
+
+    def test_rejects_names_attributes_calls_and_subscripts(self):
+        for expression in (
+                "settings",
+                "(1).__class__",
+                "abs(-1)",
+                "[1, 2][0]",
+                "{'a': 1}",
+                "True and False",
+                "1 < 2"):
+            with self.subTest(expression=expression):
+                with self.assertRaises(ValueError):
+                    safe_eval_arithmetic(expression)
+
+    def test_bounds_input_size_and_resource_exhaustion(self):
+        for expression in (
+                "1+" * 200 + "1",
+                "9" * 200,
+                "2 ** 99999999",
+                "10 ** 18 * 10 ** 18",
+                "1 / 0",
+                "1 % 0"):
+            with self.subTest(expression=expression):
+                with self.assertRaises(ValueError):
+                    safe_eval_arithmetic(expression)
+
+    def test_rejects_empty_and_non_string_values(self):
+        for value in (None, "", "   ", 42, b"7*7"):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    safe_eval_arithmetic(value)
+
+
+class CmdLab2ViewTests(TestCase):
+    """The eval lab still calculates, but refuses non arithmetic expressions."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="cmd_lab2_tester")
+        self.client.force_login(self.user)
+
+    def test_arithmetic_expression_is_evaluated(self):
+        response = self.client.post("/cmd_lab2", {"val": "7*7"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "49")
+
+    def test_code_execution_payloads_are_rejected(self):
+        for payload in CODE_INJECTION_PAYLOADS:
+            with self.subTest(payload=payload):
+                response = self.client.post("/cmd_lab2", {"val": payload})
+
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, "Expression rejected")
+                self.assertNotContains(response, "uid=")
+
+
+class MitreLab25ApiViewTests(TestCase):
+    """The calculator API fails closed instead of evaluating Python code."""
+
+    def test_arithmetic_expression_is_evaluated(self):
+        response = self.client.post("/mitre/25/lab/api", {"expression": "6*7"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["result"], 42)
+
+    def test_code_execution_payloads_are_rejected(self):
+        for payload in CODE_INJECTION_PAYLOADS:
+            with self.subTest(payload=payload):
+                response = self.client.post(
+                    "/mitre/25/lab/api", {"expression": payload})
+
+                self.assertEqual(response.status_code, 400)
+                body = response.json()
+                self.assertIn("Expression rejected", body["error"])
+                self.assertIn("Expression rejected", body["result"])
+
+    def test_missing_expression_is_rejected(self):
+        response = self.client.post("/mitre/25/lab/api", {})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Expression rejected", response.json()["error"])

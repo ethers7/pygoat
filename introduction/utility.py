@@ -1,5 +1,8 @@
+import ast
 import hashlib
 import ipaddress
+import math
+import operator
 import os
 import re
 import socket
@@ -183,6 +186,104 @@ def safe_parse_comment_xml(body):
     if node is None:
         raise ValueError('the XML document has no %s element' % _XML_COMMENT_TAG)
     return ''.join(node.itertext())
+
+
+# The calculator labs let a user submit an expression to evaluate. eval()/exec()
+# would turn that into arbitrary code execution (CWE-95), so the expression is
+# parsed with ast.parse(mode='eval') and interpreted over an explicit allowlist
+# of node types: numeric literals and the arithmetic operators the labs need.
+# Names, attribute access, calls, subscripts, comprehensions, f-strings and
+# imports are not on the allowlist, so payloads such as
+# __import__('os').popen('id') are rejected before anything is evaluated.
+_MAX_EXPRESSION_LENGTH = 120
+_MAX_EXPRESSION_RESULT = 10 ** 18
+_MAX_EXPRESSION_EXPONENT = 64
+
+_ALLOWED_BINARY_OPERATORS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+}
+
+_ALLOWED_UNARY_OPERATORS = {
+    ast.UAdd: operator.pos,
+    ast.USub: operator.neg,
+}
+
+_ALLOWED_OPERATOR_HELP = '+ - * / // % **'
+
+
+def _checked_number(value):
+    """Return value when it is a finite, in-range number, else raise ValueError."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError('only numbers are allowed')
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError('the result is not a finite number')
+    if abs(value) > _MAX_EXPRESSION_RESULT:
+        raise ValueError('the result is out of the supported range')
+    return value
+
+
+def _evaluate_expression_node(node):
+    """Interpret one allowlisted arithmetic node; raise ValueError for the rest."""
+    if isinstance(node, ast.Constant):
+        return _checked_number(node.value)
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _ALLOWED_UNARY_OPERATORS:
+        operand = _evaluate_expression_node(node.operand)
+        return _checked_number(_ALLOWED_UNARY_OPERATORS[type(node.op)](operand))
+    if isinstance(node, ast.BinOp) and type(node.op) in _ALLOWED_BINARY_OPERATORS:
+        left = _evaluate_expression_node(node.left)
+        right = _evaluate_expression_node(node.right)
+        # Bound the exponent as well as the result: 2**99999999 is cheap to
+        # write but expensive to compute (resource exhaustion).
+        if isinstance(node.op, ast.Pow) and abs(right) > _MAX_EXPRESSION_EXPONENT:
+            raise ValueError(
+                'exponents above %d are not allowed' % _MAX_EXPRESSION_EXPONENT)
+        try:
+            value = _ALLOWED_BINARY_OPERATORS[type(node.op)](left, right)
+        except ZeroDivisionError:
+            raise ValueError('division by zero')
+        except (ArithmeticError, TypeError, ValueError):
+            raise ValueError('the result is out of the supported range')
+        return _checked_number(value)
+    raise ValueError('only numbers and the %s operators are allowed'
+                     % _ALLOWED_OPERATOR_HELP)
+
+
+def safe_eval_arithmetic(expression):
+    """Return the value of an untrusted arithmetic expression.
+
+    The expression is never executed: it is parsed and then interpreted over an
+    allowlist of numeric literals and arithmetic operators, so no attribute
+    access, name lookup, call or import can be reached (CWE-95). Input length,
+    exponents and intermediate results are bounded to avoid resource
+    exhaustion.
+
+    Raises ValueError with a short, user-safe reason when the expression is
+    empty, oversized, not parseable or uses anything outside the allowlist.
+    Callers must treat ValueError as "reject the request" and must never fall
+    back to eval()/exec().
+    """
+    if not isinstance(expression, str):
+        raise ValueError('the expression must be text')
+    text = expression.strip()
+    if not text:
+        raise ValueError('the expression is empty')
+    if len(text) > _MAX_EXPRESSION_LENGTH:
+        raise ValueError(
+            'the expression is longer than %d characters' % _MAX_EXPRESSION_LENGTH)
+    try:
+        tree = ast.parse(text, mode='eval')
+    except (SyntaxError, ValueError, MemoryError, RecursionError):
+        raise ValueError('the expression is not valid arithmetic')
+    try:
+        return _evaluate_expression_node(tree.body)
+    except RecursionError:
+        raise ValueError('the expression is nested too deeply')
 
 
 # import re

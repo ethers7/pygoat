@@ -34,8 +34,9 @@ from requests.structures import CaseInsensitiveDict
 from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
-from .utility import (customHash, filter_blog, safe_lookup_target,
-                      safe_outbound_url, safe_parse_comment_xml)
+from .utility import (customHash, filter_blog, safe_eval_arithmetic,
+                      safe_lookup_target, safe_outbound_url,
+                      safe_parse_comment_xml)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -486,9 +487,12 @@ def cmd_lab2(request):
             
             print(val)
             try:
-                output = eval(val)
-            except:
-                output = "Something went wrong"
+                # Restricted arithmetic evaluator: the submitted expression is
+                # parsed and interpreted over an allowlist of numbers and
+                # operators, never executed as Python code.
+                output = safe_eval_arithmetic(val)
+            except ValueError as error:
+                output = "Expression rejected: %s" % error
                 return render(request,'Lab/CMD/cmd_lab2.html',{"output":output})
             print("Output = ", output)
             return render(request,'Lab/CMD/cmd_lab2.html',{"output":output})
