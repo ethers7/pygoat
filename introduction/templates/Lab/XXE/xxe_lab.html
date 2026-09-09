@@ -12,7 +12,13 @@
     <img class="img" src="{% static 'Lab/image/xxe.jpg' %}"><br><br>
 
 
+    {% if message %}
+    <div class="alert alert-warning" role="alert">{{ message }}</div>
+    {% endif %}
+
     <form name="ajax" onsubmit="SendToServer()">
+        {# SendToServer() reads this token and sends it as X-CSRFToken. #}
+        {% csrf_token %}
         <label for="comment">Comment Your Thoughts:</label>
         <input id="comment" type="text" name="comment">
         <input type="hidden" id="Url" data-url="{% url 'xxe_parse' %}" />

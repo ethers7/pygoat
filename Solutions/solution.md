@@ -170,6 +170,14 @@ After forwarding and turning off the Intercept, return to browser and click on b
 
 ![xee_4](https://user-images.githubusercontent.com/70275323/154611640-dfbb7d37-95d7-4e52-9f06-56b978cd9209.png)
 
+##### Mitigation (applied in this code base)
+
+The comment endpoint now parses the posted document with `defusedxml`, which
+refuses doctype declarations, entity declarations and external references.
+Well formed comments are still stored, while the payload above is answered with
+`Comment rejected: doctypes, entities and external references are not allowed`
+and nothing is read from the file system.
+
 
 ## A5:Broken Access Control
 

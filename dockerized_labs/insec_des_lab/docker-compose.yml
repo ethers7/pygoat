@@ -6,5 +6,13 @@ services:
     volumes:
       - .:/app
     environment:
-      - FLASK_ENV=development
+      # No FLASK_ENV=development here: on the Flask this lab pins it is a no-op,
+      # and on Flask < 2.3 it switches `flask run` into debug mode, which would
+      # put the interactive Werkzeug console back on the published port after
+      # the Dockerfile CMD was fixed (CWE-489). Set FLASK_DEBUG=1 instead when
+      # a debugger is genuinely wanted locally.
+      # main.py binds loopback unless told otherwise; the container needs every
+      # interface so the 8080:8080 mapping above serves http://localhost:8080.
+      # Also consumed by `flask run` in the image CMD (see Dockerfile).
+      - FLASK_RUN_HOST=0.0.0.0
     restart: unless-stopped

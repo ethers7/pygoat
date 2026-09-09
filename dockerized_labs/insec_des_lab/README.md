@@ -1,27 +1,33 @@
 # Insecure Deserialization Lab
 
-A vulnerable web application demonstrating insecure deserialization vulnerabilities in Python using pickle.
+A web application demonstrating insecure deserialization in Python, and the remediated token handling that replaces it.
 
 ## Description
 
-This lab demonstrates the dangers of insecure deserialization by implementing a vulnerable user session mechanism that uses Python's pickle module. The application allows users to:
+This lab demonstrates the dangers of insecure deserialization through a user session mechanism. The application allows users to:
 
 1. Create a regular user account
 2. Receive a serialized token
 3. Submit the token for deserialization
-4. Exploit the vulnerability to gain admin access
+4. See why tampering with the token no longer grants admin access
+
+The token round-trip uses signed JSON (a base64url payload plus an HMAC-SHA256 signature) instead of `pickle`, so a hostile token cannot execute code and a client cannot flip its own `is_admin` flag.
 
 ## Features
 
-- Vulnerable pickle deserialization
-- Base64 encoded serialized data
+- Signed, data-only (JSON) session tokens with strict type validation
+- Base64url encoded payload and signature
 - User role system (regular user vs admin)
 - Docker containerization
 - Light/Dark theme support
 
 ## Security Warning
 
-⚠️ This lab contains intentionally vulnerable code for educational purposes. Do not use this code in production environments.
+⚠️ This lab exists to teach an OWASP Top 10 category. Do not reuse the demo admin content or the ephemeral key fallback in production environments.
+
+## Configuration
+
+Set `LAB_TOKEN_SIGNING_KEY` to keep tokens valid across restarts. When it is unset the app generates a random per-process key, so previously issued tokens stop validating after a restart. No key is hard-coded.
 
 ## Installation
 
@@ -54,6 +60,8 @@ pip install -r requirements.txt
 python main.py
 ```
 
+The server listens on `127.0.0.1:8080` by default, so it is only reachable from the machine running it. Set `FLASK_RUN_HOST=0.0.0.0` to bind every interface (the Docker setup above does this so the published port works); only do that on a network you trust, because this lab is intentionally vulnerable.
+
 ## Lab Structure
 
 ```
@@ -72,20 +80,25 @@ insec_des_lab/
 
 ## Vulnerability Details
 
-The lab uses Python's pickle module for serialization/deserialization of user data. The vulnerability exists because:
+The original version of this lab used Python's `pickle` module for serialization/deserialization of user data. That was exploitable because:
 
-1. The application trusts user-provided serialized data
-2. Uses pickle.loads() without validation
-3. The User class has a vulnerable __reduce__ method
+1. The application trusted user-provided serialized data
+2. It called `pickle.loads()` without integrity or type validation
+3. The `User` class exposed a `__reduce__` method, so a crafted payload could run arbitrary code
 
-## Exploitation Steps
+## What Changed
+
+1. `pickle.dumps()` / `pickle.loads()` were replaced with signed JSON (`json` + `hmac.new(..., hashlib.sha256)`)
+2. Signatures are compared with `hmac.compare_digest` before the payload is parsed
+3. The parsed payload must contain exactly a string `username` and a boolean `is_admin`; anything else is rejected
+4. The pickle-only `__reduce__` method was removed
+
+## Try It
 
 1. Create a regular user account
-2. Intercept the serialized token
-3. Decode the base64 token
-4. Modify the serialized data to set is_admin=True
-5. Re-encode the modified data
-6. Submit the modified token to gain admin access
+2. Intercept the token and base64url-decode the payload segment
+3. Modify the payload to set `is_admin` to `true` and re-encode it
+4. Submit the modified token — the signature check rejects it and admin content stays hidden
 
 ## Mitigation Strategies
 

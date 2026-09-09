@@ -1,6 +1,8 @@
 event5 = function(){
     var code = document.getElementById('a6_t1').value
-    var myHeaders = new Headers();
+    // withCsrfHeader() adds the X-CSRFToken header Django requires on this
+    // same-origin POST (see js/csrf.js).
+    var myHeaders = withCsrfHeader(new Headers());
     var formdata = new FormData();
 
     formdata.append("code", code);
@@ -8,6 +10,7 @@ event5 = function(){
         method: 'POST',
         headers: myHeaders,
         body: formdata,
+        credentials: 'same-origin',
         redirect: 'follow'
     };
     fetch("/2021/discussion/A6/api2", requestOptions)
@@ -23,7 +26,9 @@ event5 = function(){
 
 event6 = function(){
     var code = document.getElementById('a6_t1').value
-    var myHeaders = new Headers();
+    // withCsrfHeader() adds the X-CSRFToken header Django requires on this
+    // same-origin POST (see js/csrf.js).
+    var myHeaders = withCsrfHeader(new Headers());
     var formdata = new FormData();
 
     formdata.append("code", code);
@@ -31,6 +36,7 @@ event6 = function(){
         method: 'POST',
         headers: myHeaders,
         body: formdata,
+        credentials: 'same-origin',
         redirect: 'follow'
     };
     fetch("/2021/discussion/A6/api", requestOptions)

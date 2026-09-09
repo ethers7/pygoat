@@ -35,6 +35,11 @@ function SendToServer(){
         var url = $("#Url").attr("data-url");
        xhr.open("POST", url, true);
        xhr.setRequestHeader("Content-Type", "text/xml");
+       // An XML body carries no csrfmiddlewaretoken field, so send the token in
+       // the X-CSRFToken header Django looks for (see js/csrf.js). The cookies
+       // for this origin ride along because the request is same-origin.
+       xhr.setRequestHeader("X-CSRFToken", getCsrfToken());
+       xhr.withCredentials = true;
        xhr.send(xml);
 
 }

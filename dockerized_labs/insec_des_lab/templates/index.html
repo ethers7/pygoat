@@ -27,10 +27,14 @@
                 This Lab consists of a Page that has some content only available to for the admin to see. How can we access that
                 page as admin? How is our role defined?
             </p>
-            <p class="bp">If we check the cookie we see that it is base64 encoded, on decoding we realise it is pickle
-                serialised and we can see some attributes, can you change the attributes to make the page readable?
+            <p class="bp">The token is now signed JSON: a base64url payload of primitive attributes followed by an
+                HMAC-SHA256 signature. Decoding it still shows the attributes, but try editing them and submitting the
+                token again &mdash; the signature check rejects it, and because the payload is plain data it can never
+                execute code the way a pickled object graph could.
             </p>
-            <p class="bp">Hint: try to flip the bit of the admin from ...admin\x94K\x00... to ...admin\x94K\x01...
+            <p class="bp">Hint: compare this with the pickle-based version of the lab. Flipping the admin flag in a
+                pickle payload (...admin\x94K\x00... to ...admin\x94K\x01...) used to work here, and a crafted pickle
+                could run arbitrary commands; neither is possible against a signed, data-only token.
             </p>
         </div>
 
@@ -59,6 +63,8 @@
         <div class="section">
             <h2>Create User</h2>
             <form action="/serialize" method="POST">
+                {# CSRF token for this session (CWE-352); see require_csrf_token() in main.py. #}
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="text" name="username" placeholder="Enter username" required>
                 <button type="submit">Create User</button>
             </form>
@@ -67,6 +73,8 @@
         <div class="section">
             <h2>View Admin Content</h2>
             <form action="/deserialize" method="POST">
+                {# CSRF token for this session (CWE-352); see require_csrf_token() in main.py. #}
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <textarea name="serialized_data" placeholder="Enter base64-encoded serialized data" required></textarea>
                 <button type="submit">View Content</button>
             </form>

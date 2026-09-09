@@ -3,41 +3,39 @@ import datetime
 import hashlib
 import json
 import logging
-import os
-import pickle
 import random
 import re
 import string
 import subprocess
 import uuid
 from dataclasses import dataclass
-from hashlib import md5
 from io import BytesIO
 from random import randint
-from xml.dom.pulldom import START_ELEMENT, parseString
-from xml.sax import make_parser
-from xml.sax.handler import feature_external_ges
+from urllib.parse import urljoin
 
 import jwt
 import requests
 import yaml
 from argon2 import PasswordHasher
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import authenticate, login
 from django.contrib.auth.forms import UserCreationForm
-from django.core import serializers
-from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
+from django.core import serializers, signing
+from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
 from django.template import loader
-from django.template.loader import render_to_string
-from django.views.decorators.csrf import csrf_exempt
 from PIL import Image, ImageMath
 from requests.structures import CaseInsensitiveDict
 
 from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
-from .utility import customHash, filter_blog
+from .utility import (MAX_OUTBOUND_RESPONSE_BYTES, OUTBOUND_FETCH_TIMEOUT,
+                      check_lab_password, customHash, filter_blog,
+                      read_bounded_body, read_lab_file, safe_eval_arithmetic,
+                      safe_lab_text, safe_lookup_target, safe_outbound_url,
+                      safe_parse_comment_xml, write_lab_file)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -155,11 +153,12 @@ def sql_lab(request):
 
             if login.objects.filter(user=name):
 
-                sql_query = "SELECT * FROM introduction_login WHERE user='"+name+"' AND password='"+password+"'"
+                sql_query = "SELECT * FROM introduction_login WHERE user=%s AND password=%s"
+                sql_params = [name, password]
                 print(sql_query)
                 try:
                     print("\nin try\n")
-                    val=login.objects.raw(sql_query)
+                    val=login.objects.raw(sql_query, sql_params)
                 except:
                     print("\nin except\n")
                     return render(
@@ -199,19 +198,52 @@ def insec_des(request):
 @dataclass
 class TestUser:
     admin: int = 0
-pickled_user = pickle.dumps(TestUser())
-encoded_user = base64.b64encode(pickled_user)
+
+
+def dump_lab_user(user):
+    """Serialise the lab user as signed JSON: primitive data only, no object graph."""
+    return signing.dumps({"admin": int(user.admin)})
+
+
+def load_lab_user(token):
+    """Verify the signature, then rebuild TestUser from primitive JSON fields.
+
+    JSON carries data only, so a hostile cookie can never execute code the way
+    a pickled object graph would. The signature check plus the strict type
+    constraints below also stop a client from flipping ``admin`` in its own
+    token. Raises signing.BadSignature when the token is malformed, tampered
+    with, or does not describe exactly the expected primitive field.
+    """
+    data = signing.loads(token)
+    if not isinstance(data, dict) or set(data) != {"admin"}:
+        raise signing.BadSignature("Unexpected token payload")
+    admin = data["admin"]
+    if isinstance(admin, bool) or not isinstance(admin, int):
+        raise signing.BadSignature("Unexpected token field types")
+    return TestUser(admin=admin)
+
 
 def insec_des_lab(request):
     if request.user.is_authenticated:
         response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Only Admins can see this page"})
         token = request.COOKIES.get('token')
         if token == None:
-            token = encoded_user
-            response.set_cookie(key='token',value=token.decode('utf-8'))
+            # CWE-614: the signed lab token is server state only - no script
+            # reads it, so HttpOnly + SameSite=Lax; Secure follows the deployed
+            # transport (settings.LAB_COOKIE_SECURE).
+            response.set_cookie(
+                key='token',
+                value=dump_lab_user(TestUser()),
+                httponly=True,
+                samesite='Lax',
+                secure=settings.LAB_COOKIE_SECURE)
         else:
-            token = base64.b64decode(token)
-            admin = pickle.loads(token)
+            try:
+                admin = load_lab_user(token)
+            except (signing.BadSignature, ValueError):
+                # Report the rejection without echoing the supplied token back.
+                logging.warning("Rejected invalid or tampered insec_des lab token")
+                return render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Invalid or tampered token"})
             if admin.admin == 1:
                 response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Welcome Admin, SECRETKEY:ADMIN123"})
                 return response
@@ -236,7 +268,6 @@ def xxe_lab(request):
     else:
         return redirect('login')
 
-@csrf_exempt
 def xxe_see(request):
     if request.user.is_authenticated:
         # Get first comment or create a default one if none exist
@@ -252,20 +283,19 @@ def xxe_see(request):
         return redirect('login')
 
 
-@csrf_exempt
 def xxe_parse(request):
-
-    parser = make_parser()
-    parser.setFeature(feature_external_ges, True)
-    doc = parseString(request.body.decode('utf-8'), parser=parser)
-    for event, node in doc:
-        if event == START_ELEMENT and node.tagName == 'text':
-            doc.expandNode(node)
-            text = node.toxml()
-    startInd = text.find('>')
-    endInd = text.find('<', startInd)
-    text = text[startInd + 1:endInd:]
-    p=comments.objects.filter(id=1).update(comment=text)
+    # The posted document is untrusted: parse it with the defused parser so
+    # external entities and entity expansion are refused (CWE-611).
+    try:
+        text = safe_parse_comment_xml(request.body)
+    except ValueError as rejected:
+        logging.warning("Rejected XXE lab document: %s", rejected)
+        return render(
+            request,
+            'Lab/XXE/xxe_lab.html',
+            {"message": "Comment rejected: %s" % rejected},
+            status=400)
+    comments.objects.filter(id=1).update(comment=text)
 
     return render(request, 'Lab/XXE/xxe_lab.html')
 
@@ -286,9 +316,22 @@ def auth_lab_signup(request):
             passwd  = request.POST['pass']
             obj = authLogin.objects.create(name=name,username=user_name,password=passwd)
             try:
-                rendered = render_to_string('Lab/AUTH/auth_success.html', {'username': obj.username,'userid':obj.userid,'name':obj.name,'err_msg':'Cookie Set'})
-                response = HttpResponse(rendered)
-                response.set_cookie('userid', obj.userid, max_age=31449600, samesite=None, secure=False)
+                # CWE-79: build the page with the template engine instead of
+                # writing a pre-rendered string into a bare HttpResponse, so the
+                # attacker controlled name/username are HTML escaped by Django's
+                # autoescaping before they are reflected back.
+                response = render(
+                    request,
+                    'Lab/AUTH/auth_success.html',
+                    {'username': obj.username, 'userid': obj.userid, 'name': obj.name, 'err_msg': 'Cookie Set'})
+                # CWE-614: the auth lab identifies the visitor with this cookie
+                # and no page script reads it, so it is HttpOnly and stays off
+                # cross-site requests (SameSite=Lax). Secure is environment
+                # driven because this lab is served over plain HTTP by default.
+                response.set_cookie(
+                    'userid', obj.userid, max_age=31449600,
+                    httponly=True, samesite='Lax',
+                    secure=settings.LAB_COOKIE_SECURE)
                 print('Setting cookie successful')
                 return response
             except:
@@ -300,9 +343,19 @@ def auth_lab_login(request):
     if request.method == 'GET':
         try:
             obj = authLogin.objects.filter(userid=request.COOKIES['userid'])[0]
-            rendered = render_to_string('Lab/AUTH/auth_success.html', {'username': obj.username,'userid':obj.userid,'name':obj.name, 'err_msg':'Login Successful'})
-            response = HttpResponse(rendered)
-            response.set_cookie('userid', obj.userid, max_age=31449600, samesite=None, secure=False)
+            # CWE-79: render through the template engine so the stored (user
+            # supplied) name/username are escaped instead of being streamed
+            # straight to the browser from a bare HttpResponse.
+            response = render(
+                request,
+                'Lab/AUTH/auth_success.html',
+                {'username': obj.username, 'userid': obj.userid, 'name': obj.name, 'err_msg': 'Login Successful'})
+            # CWE-614: same attributes as the signup path - HttpOnly, Lax, and
+            # an environment driven Secure flag.
+            response.set_cookie(
+                'userid', obj.userid, max_age=31449600,
+                httponly=True, samesite='Lax',
+                secure=settings.LAB_COOKIE_SECURE)
             print('Login successful')
             return response
         except:
@@ -314,9 +367,16 @@ def auth_lab_login(request):
             print(user_name,passwd)
             obj = authLogin.objects.filter(username=user_name,password=passwd)[0]
             try:
-                rendered = render_to_string('Lab/AUTH/auth_success.html', {'username': obj.username,'userid':obj.userid,'name':obj.name, 'err_msg':'Login Successful'})
-                response = HttpResponse(rendered)
-                response.set_cookie('userid', obj.userid, max_age=31449600, samesite=None, secure=False)
+                # CWE-79: same escaping guarantee for the POST login path.
+                response = render(
+                    request,
+                    'Lab/AUTH/auth_success.html',
+                    {'username': obj.username, 'userid': obj.userid, 'name': obj.name, 'err_msg': 'Login Successful'})
+                # CWE-614: same attributes as the GET login path.
+                response.set_cookie(
+                    'userid', obj.userid, max_age=31449600,
+                    httponly=True, samesite='Lax',
+                    secure=settings.LAB_COOKIE_SECURE)
                 print('Login successful')
                 return response
             except:
@@ -325,20 +385,19 @@ def auth_lab_login(request):
             return render(request,'Lab/AUTH/auth_lab_login.html',{'err_msg':'Check your credentials'})
 
 def auth_lab_logout(request):
-    rendered = render_to_string('Lab/AUTH/auth_lab.html',context={'err_msg':'Logout successful'})
-    response = HttpResponse(rendered)    
+    # CWE-79: no user data here today, but the response is built with the
+    # template engine so any future context value stays escaped.
+    response = render(request, 'Lab/AUTH/auth_lab.html', {'err_msg': 'Logout successful'})
     response.delete_cookie('userid')
     return response
 
 #***************************************************************Broken Access Control************************************************************#
 
-@csrf_exempt
 def ba(request):
     if request.user.is_authenticated:
         return render(request,"Lab/BrokenAccess/ba.html")
     else:
         return redirect('login')
-@csrf_exempt
 def ba_lab(request):
     if request.user.is_authenticated:
         name = request.POST.get('name')
@@ -360,7 +419,14 @@ def ba_lab(request):
                         "data":"0NLY_F0R_4DM1N5",
                         "username": "admin"
                     })
-                html.set_cookie("admin", "1",max_age=200)
+                # CWE-614: the role marker is read back by the view only (no
+                # document.cookie access anywhere in the lab templates), so it is
+                # HttpOnly and SameSite=Lax. Secure is environment driven -
+                # see settings.LAB_COOKIE_SECURE.
+                html.set_cookie(
+                    "admin", "1", max_age=200,
+                    httponly=True, samesite='Lax',
+                    secure=settings.LAB_COOKIE_SECURE)
                 return html
             elif login.objects.filter(user=name,password=password):
                 html = render(
@@ -370,7 +436,11 @@ def ba_lab(request):
                     "not_admin":"No Secret key for this User",
                     "username": name
                 })
-                html.set_cookie("admin", "0",max_age=200)
+                # CWE-614: same attributes as the admin branch above.
+                html.set_cookie(
+                    "admin", "0", max_age=200,
+                    httponly=True, samesite='Lax',
+                    secure=settings.LAB_COOKIE_SECURE)
                 return html
             else:
                 return render(request, 'Lab/BrokenAccess/ba_lab.html', {"data": "User Not Found"})
@@ -411,7 +481,6 @@ def cmd(request):
         return render(request,'Lab/CMD/cmd.html')
     else:
         return redirect('login')
-@csrf_exempt
 def cmd_lab(request):
     if request.user.is_authenticated:
         if(request.method=="POST"):
@@ -420,17 +489,22 @@ def cmd_lab(request):
             domain = re.sub(r'^(?:(https?|ftp)://)?(?:www\.)?', '', domain, flags=re.IGNORECASE)
             os=request.POST.get('os')
             print(os)
+            # Only a plain hostname / IP may reach the resolver command.
+            domain = safe_lookup_target(domain)
+            if domain is None:
+                output = "Invalid domain"
+                return render(request,'Lab/CMD/cmd_lab.html',{"output":output})
             if(os=='win'):
-                command="nslookup {}".format(domain)
+                command=["nslookup", domain]
             else:
-                command = "dig {}".format(domain)
-            
+                command = ["dig", domain]
+
             try:
-                # output=subprocess.check_output(command,shell=True,encoding="UTF-8")
+                # argv list + shell=False: the domain is one argument, never shell syntax.
                 process = subprocess.Popen(
                     command,
-                    shell=True,
-                    stdout=subprocess.PIPE, 
+                    shell=False,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
                 stdout, stderr = process.communicate()
                 data = stdout.decode('utf-8')
@@ -449,7 +523,6 @@ def cmd_lab(request):
     else:
         return redirect('login')
 
-@csrf_exempt
 def cmd_lab2(request):
     if request.user.is_authenticated:
         if (request.method=="POST"):
@@ -457,9 +530,12 @@ def cmd_lab2(request):
             
             print(val)
             try:
-                output = eval(val)
-            except:
-                output = "Something went wrong"
+                # Restricted arithmetic evaluator: the submitted expression is
+                # parsed and interpreted over an allowlist of numbers and
+                # operators, never executed as Python code.
+                output = safe_eval_arithmetic(val)
+            except ValueError as error:
+                output = "Expression rejected: %s" % error
                 return render(request,'Lab/CMD/cmd_lab2.html',{"output":output})
             print("Output = ", output)
             return render(request,'Lab/CMD/cmd_lab2.html',{"output":output})
@@ -489,7 +565,6 @@ def bau_lab(request):
 def login_otp(request):
     return render(request,"Lab/BrokenAuth/otp.html")
 
-@csrf_exempt
 def Otp(request):
     if request.method=="GET":
         email=request.GET.get('email')
@@ -498,13 +573,24 @@ def Otp(request):
             if email=="admin@pygoat.com":
                 otp.objects.filter(id=2).update(otp=otpN)
                 html = render(request, "Lab/BrokenAuth/otp.html", {"otp":"Sent To Admin Mail ID"})
-                html.set_cookie("email", email)
+                # CWE-614: the OTP flow reads this back from request.COOKIES on
+                # the server only, so keep it out of document.cookie (HttpOnly)
+                # and off cross-site requests (SameSite=Lax). Secure follows the
+                # deployed transport - see settings.LAB_COOKIE_SECURE.
+                html.set_cookie(
+                    "email", email,
+                    httponly=True, samesite='Lax',
+                    secure=settings.LAB_COOKIE_SECURE)
                 return html
 
             else:
                 otp.objects.filter(id=1).update(email=email, otp=otpN)
                 html=render (request,"Lab/BrokenAuth/otp.html",{"otp":otpN})
-                html.set_cookie("email",email)
+                # CWE-614: same attributes as the admin branch above.
+                html.set_cookie(
+                    "email", email,
+                    httponly=True, samesite='Lax',
+                    secure=settings.LAB_COOKIE_SECURE)
                 return html
         else:
             return render(request,"Lab/BrokenAuth/otp.html")
@@ -547,7 +633,6 @@ def a9(request):
         return render(request,"Lab/A9/a9.html")
     else:
         return redirect('login')
-@csrf_exempt
 def a9_lab(request):
     if request.user.is_authenticated:
         if request.method=="GET":
@@ -557,7 +642,9 @@ def a9_lab(request):
             try :
                 file=request.FILES["file"]
                 try :
-                    data = yaml.load(file,yaml.Loader)
+                    # safe_load only builds plain Python data: no arbitrary
+                    # object/tag construction from an uploaded YAML file.
+                    data = yaml.safe_load(file)
                     
                     return render(request,"Lab/A9/a9_lab.html",{"data":data})
                 except:
@@ -570,7 +657,6 @@ def a9_lab(request):
 def get_version(request):
       return render(request,"Lab/A9/a9_lab.html",{"version":"pyyaml v5.1"})
 
-@csrf_exempt
 def a9_lab2(request):
     if not request.user.is_authenticated:
         return redirect('login')
@@ -735,7 +821,6 @@ def insec_desgine_lab(request):
 
 ###################################################### 2021 A1: Broken Access
 
-@csrf_exempt
 def a1_broken_access(request):
     if not request.user.is_authenticated:
         return redirect('login')
@@ -743,7 +828,6 @@ def a1_broken_access(request):
     return render(request,"Lab_2021/A1_BrokenAccessControl/broken_access.html")
 
 
-@csrf_exempt
 def a1_broken_access_lab_1(request):
     if request.user.is_authenticated:
         pass
@@ -771,7 +855,12 @@ def a1_broken_access_lab_1(request):
                 "not_admin":"No Secret key for this User",
                 "username": name
             })
-            html.set_cookie("admin", "0",max_age=200)
+            # CWE-614: the A1 lab role marker is server read only - HttpOnly,
+            # SameSite=Lax, environment driven Secure.
+            html.set_cookie(
+                "admin", "0", max_age=200,
+                httponly=True, samesite='Lax',
+                secure=settings.LAB_COOKIE_SECURE)
             return html
         else:
             return render(request, 'Lab_2021/A1_BrokenAccessControl/broken_access_lab_1.html', {"data": "User Not Found"})
@@ -779,7 +868,6 @@ def a1_broken_access_lab_1(request):
     else:
         return render(request,'Lab_2021/A1_BrokenAccessControl/broken_access_lab_1.html',{"no_creds":True})
 
-@csrf_exempt
 def a1_broken_access_lab_2(request):
     if request.user.is_authenticated:
         pass
@@ -843,7 +931,6 @@ def a1_broken_access_lab3_secret(request):
 
 ###################################################### 2021 A3: Injection
 
-@csrf_exempt
 def injection(request):
     if not request.user.is_authenticated:
         return redirect('login')
@@ -851,7 +938,6 @@ def injection(request):
     return render(request,"Lab_2021/A3_Injection/injection.html")
 
 
-@csrf_exempt
 def injection_sql_lab(request):
     if request.user.is_authenticated:
 
@@ -861,7 +947,8 @@ def injection_sql_lab(request):
         print(password)
 
         if name:
-            sql_query = "SELECT * FROM introduction_sql_lab_table WHERE id='"+name+"'AND password='"+password+"'"
+            sql_query = "SELECT * FROM introduction_sql_lab_table WHERE id=%s AND password=%s"
+            sql_params = [name, password]
 
             sql_instance = sql_lab_table(id="admin", password="65079b006e85a7e798abecb99e47c154")
             sql_instance.save()
@@ -875,7 +962,7 @@ def injection_sql_lab(request):
             print(sql_query)
 
             try:
-                user = sql_lab_table.objects.raw(sql_query)
+                user = sql_lab_table.objects.raw(sql_query, sql_params)
                 user = user[0].id
                 print(user)
 
@@ -915,20 +1002,28 @@ def ssrf(request):
     else:
         return redirect('login')
 
+# Shown for every blog the reader refuses: a destination outside the allowlisted
+# blog directory and a name that simply does not exist get the same answer.
+SSRF_LAB_NO_BLOG = "No blog found"
+
+
 def ssrf_lab(request):
     if request.user.is_authenticated:
         if request.method=="GET":
             return render(request,"Lab/ssrf/ssrf_lab.html",{"blog":"Read Blog About SSRF"})
         else:
-            file=request.POST["blog"]
-            try :
-                dirname = os.path.dirname(__file__)
-                filename = os.path.join(dirname, file)
-                file = open(filename,"r")
-                data = file.read()
-                return render(request,"Lab/ssrf/ssrf_lab.html",{"blog":data})
-            except:
-                return render(request, "Lab/ssrf/ssrf_lab.html", {"blog": "No blog found"})
+            # The blog name is request data. It used to be joined onto this
+            # package's directory and opened, which let a caller read any file the
+            # worker could open: "../../etc/passwd" walks out of the tree, and an
+            # absolute name would have replaced the base directory outright
+            # (CWE-22). read_lab_file() confines the read to the allowlisted blog
+            # directory and answers a refused destination exactly like a missing
+            # one, so the lab cannot be used to probe the filesystem.
+            data = read_lab_file(request.POST.get("blog"))
+            if data is None:
+                return render(request, "Lab/ssrf/ssrf_lab.html",
+                              {"blog": SSRF_LAB_NO_BLOG}, status=404)
+            return render(request,"Lab/ssrf/ssrf_lab.html",{"blog":data})
     else:
         return redirect('login')
 
@@ -952,19 +1047,79 @@ def ssrf_target(request):
     else:
         return render(request,"Lab/ssrf/ssrf_target.html",{"access_denied":True})
 
+SSRF_LAB_MAX_REDIRECTS = 3
+SSRF_LAB_REJECTED = "URL rejected: only http(s) URLs of allowlisted public hosts can be fetched."
+SSRF_LAB_TOO_LARGE = (
+    "Response rejected: the target sent more than %d bytes."
+    % MAX_OUTBOUND_RESPONSE_BYTES)
+
+
 @authentication_decorator
 def ssrf_lab2(request):
     if request.method == "GET":
         return render(request, "Lab/ssrf/ssrf_lab2.html")
 
     elif request.method == "POST":
-        url = request.POST["url"]
+        # SSRF guard (CWE-918): only fetch a destination that safe_outbound_url
+        # accepted (http/https, allowlisted host, publicly routable address), and
+        # re-validate every redirect hop, so user input can never make the server
+        # reach loopback, link-local metadata or other internal services.
+        target = safe_outbound_url(request.POST["url"])
+        if target is None:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": SSRF_LAB_REJECTED})
+        # Resource guard (CWE-400): the fetch carries an explicit connect/read
+        # timeout so a silent or slow target cannot pin this worker forever, the
+        # redirect chain is bounded, and the body is streamed and buffered only
+        # up to MAX_OUTBOUND_RESPONSE_BYTES instead of pulling a response of
+        # unknown size into memory with .content.
         try:
-            response = requests.get(url)
-            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+            for _ in range(SSRF_LAB_MAX_REDIRECTS + 1):
+                with requests.get(
+                        target,
+                        timeout=OUTBOUND_FETCH_TIMEOUT,
+                        allow_redirects=False,
+                        stream=True) as response:
+                    if not response.is_redirect:
+                        body = read_bounded_body(response)
+                        if body is None:
+                            return render(
+                                request,
+                                "Lab/ssrf/ssrf_lab2.html",
+                                {"error": SSRF_LAB_TOO_LARGE})
+                        return render(
+                            request,
+                            "Lab/ssrf/ssrf_lab2.html",
+                            {"response": body.decode(errors="replace")})
+                    location = response.headers.get("location", "")
+                target = safe_outbound_url(urljoin(target, location))
+                if target is None:
+                    return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": SSRF_LAB_REJECTED})
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Too many redirects"})
+        except requests.RequestException:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
+
+# The blog editor stores the body a reader submits and serves it back. That body
+# is untrusted data, so it is kept as plain text inside the lab's own blog
+# directory and printed by SSTI_BLOG_TEMPLATE through the template engine, which
+# escapes it. It is never concatenated into template/HTML source and never
+# marked safe.
+SSTI_BLOG_DIR = "templates/Lab_2021/A3_Injection/Blogs"
+SSTI_BLOG_EXTENSION = ".txt"
+SSTI_BLOG_TEMPLATE = "Lab_2021/A3_Injection/ssti_blog.html"
+# Shown for every blog that cannot be served: a destination outside the lab's
+# blog directory and a name that does not exist get the same answer.
+SSTI_BLOG_NOT_FOUND = "No blog found"
+
+
+def ssti_blog_relative_path(blog_id):
+    """Return the lab-relative path of the stored body of blog_id.
+
+    The value is only a candidate: the read/write guards resolve it and refuse
+    anything that does not land directly in the lab's blog directory.
+    """
+    return "%s/%s%s" % (SSTI_BLOG_DIR, blog_id, SSTI_BLOG_EXTENSION)
+
 
 def ssti(request):
     if request.user.is_authenticated:
@@ -978,23 +1133,34 @@ def ssti_lab(request):
             users_blogs = Blogs.objects.filter(author=request.user)
             return render(request,"Lab_2021/A3_Injection/ssti_lab.html", {"blogs":users_blogs})
         elif request.method=="POST":
-            blog = request.POST["blog"]
+            # The blog body is request data. It used to be concatenated into
+            # Django template source - "{% extends ... %}" + blog + "{% endblock %}"
+            # - that was written to disk and then rendered as a template, so any
+            # markup a reader submitted came back as live HTML (stored cross-site
+            # scripting, CWE-79) and any template tag was executed as well. No
+            # HTML is built by string formatting here any more: the body is
+            # stored as plain text and ssti_view_blog() hands it to a fixed
+            # template as context data, so the engine escapes it.
+            # The write itself stays guarded (CWE-93): safe_lab_text() folds
+            # CR/CRLF to LF, drops the remaining control characters and bounds
+            # the size, and write_lab_file() confines the destination to the
+            # lab's own Blogs directory. The raw request value is never written.
+            try:
+                blog = safe_lab_text(request.POST["blog"])
+            except ValueError as rejected:
+                return render(
+                    request,
+                    "Lab_2021/A3_Injection/ssti_lab.html",
+                    {
+                        "blogs": Blogs.objects.filter(author=request.user),
+                        "error": str(rejected)
+                    })
             id = str(uuid.uuid4()).split('-')[-1]
 
             blog = filter_blog(blog)
-            prepend_code = "{% extends 'introduction/base.html' %}\
-                {% block content %}{% block title %}\
-                <title>SSTI-Blogs</title>\
-                {% endblock %}"
-            
-            blog = prepend_code + blog + "{% endblock %}"
             new_blog = Blogs.objects.create(author = request.user, blog_id = id)
-            new_blog.save() 
-            dirname = os.path.dirname(__file__)
-            filename = os.path.join(dirname, f"templates/Lab_2021/A3_Injection/Blogs/{id}.html")
-            file = open(filename, "w+") 
-            file.write(blog)
-            file.close()
+            new_blog.save()
+            write_lab_file(ssti_blog_relative_path(id), blog)
             return redirect(f'blog/{id}')
     else:
         return redirect('login')
@@ -1003,7 +1169,21 @@ def ssti_lab(request):
 def ssti_view_blog(request,blog_id):
     if request.user.is_authenticated:
         if request.method=="GET":
-            return render(request,f"Lab_2021/A3_Injection/Blogs/{blog_id}.html")
+            # blog_id comes from the URL. Rendering
+            # "Blogs/<blog_id>.html" made the stored body part of the template
+            # that was executed, which is what turned a submitted <script> into
+            # a live one. The body is read back as data instead - read_lab_file()
+            # confines the read to the lab's blog directory and reports a refused
+            # destination exactly like a missing blog (CWE-22) - and printed by a
+            # fixed template, so the engine escapes whatever it contains.
+            blog = read_lab_file(
+                ssti_blog_relative_path(blog_id),
+                allowed_dirs=(SSTI_BLOG_DIR,),
+                allowed_extensions=(SSTI_BLOG_EXTENSION,))
+            if blog is None:
+                return render(request, SSTI_BLOG_TEMPLATE,
+                              {"error": SSTI_BLOG_NOT_FOUND}, status=404)
+            return render(request, SSTI_BLOG_TEMPLATE, {"blog": blog})
         elif request.method=="POST":
             return HttpResponseBadRequest()
 
@@ -1023,8 +1203,14 @@ def crypto_failure_lab(request):
             username = request.POST["username"]
             password = request.POST["password"]
             try:
-                password = md5(password.encode()).hexdigest()
-                user = CF_user.objects.filter(username=username,password=password).first()
+                # CWE-327: the submitted password is verified against the salted,
+                # adaptive hash stored for the account (see check_lab_password)
+                # instead of being turned into an unsalted MD5 digest and matched
+                # in the database. An unidentifiable/legacy stored hash fails
+                # closed rather than authenticating through a broken algorithm.
+                user = CF_user.objects.filter(username=username).first()
+                if user is not None and not check_lab_password(password, user.password):
+                    user = None
                 return render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab.html",{"user":user, "success":True,"failure":False})
             except Exception as e:
                 return render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab.html",{"success":False, "failure":True})
@@ -1073,12 +1259,22 @@ def crypto_failure_lab3(request):
                     expire = datetime.datetime.now() + datetime.timedelta(minutes=60)
                     cookie = f"{username}|{expire}"
                     response = render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab3.html",{"success":True, "failure":False , "admin":False})
-                    response.set_cookie("cookie", cookie)
+                    # CWE-614: session marker for the crypto lab - decoded by the
+                    # view, never by a script, so HttpOnly + SameSite=Lax, with
+                    # Secure taken from settings.LAB_COOKIE_SECURE.
+                    response.set_cookie(
+                        "cookie", cookie,
+                        httponly=True, samesite='Lax',
+                        secure=settings.LAB_COOKIE_SECURE)
                     response.status_code = 200
                     return response
                 else:
                     response = render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab3.html",{"success":False, "failure":True})
-                    response.set_cookie("cookie", None)
+                    # CWE-614: same attributes on the failure path.
+                    response.set_cookie(
+                        "cookie", None,
+                        httponly=True, samesite='Lax',
+                        secure=settings.LAB_COOKIE_SECURE)
                     return response
             except:
                 return render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab2.html",{"success":False, "failure":True})
@@ -1106,7 +1302,14 @@ def sec_misconfig_lab3(request):
 
         cookie = jwt.encode(payload, SECRET_COOKIE_KEY, algorithm='HS256')
         response = render(request,"Lab/sec_mis/sec_mis_lab3.html", {"admin":False} )
-        response.set_cookie(key = "auth_cookie", value = cookie)
+        # CWE-614: the JWT is verified server side in this view, so no script
+        # needs it (HttpOnly) and it never travels cross-site (SameSite=Lax).
+        # Secure comes from settings.LAB_COOKIE_SECURE because the lab is served
+        # over plain HTTP unless the deployment terminates TLS.
+        response.set_cookie(
+            key="auth_cookie", value=cookie,
+            httponly=True, samesite='Lax',
+            secure=settings.LAB_COOKIE_SECURE)
         return response
 
 # - ------------------------Identification and Authentication Failures--------------------------------
@@ -1175,7 +1378,6 @@ USER_A7_LAB3 = {
 # }
 
 @authentication_decorator
-@csrf_exempt
 def auth_failure_lab3(request):
     if request.method == "GET":
         try:
@@ -1194,14 +1396,25 @@ def auth_failure_lab3(request):
             password = hashlib.sha256(password.encode()).hexdigest()
         except:
             response = render(request, "Lab_2021/A7_auth_failure/lab3.html")
-            response.set_cookie("session_id", None)
+            # CWE-614: session identifier - HttpOnly and SameSite=Lax always,
+            # Secure from settings.LAB_COOKIE_SECURE.
+            response.set_cookie(
+                "session_id", None,
+                httponly=True, samesite='Lax',
+                secure=settings.LAB_COOKIE_SECURE)
             return response
 
         if USER_A7_LAB3[username]['password'] == password:
             session_data = AF_session_id.objects.create(session_id=token, user=USER_A7_LAB3[username]['username'])
             session_data.save()
             response = render(request, "Lab_2021/A7_auth_failure/lab3.html", {"success":True, "failure":False, "username":username})
-            response.set_cookie("session_id", token)
+            # CWE-614: the issued session id is looked up in AF_session_id by
+            # the view, so it is HttpOnly and SameSite=Lax; Secure is
+            # environment driven (settings.LAB_COOKIE_SECURE).
+            response.set_cookie(
+                "session_id", token,
+                httponly=True, samesite='Lax',
+                secure=settings.LAB_COOKIE_SECURE)
             return response
 
 #-- coding playground for lab2

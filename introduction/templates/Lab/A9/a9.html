@@ -33,8 +33,10 @@
                 <code>!!python/object/apply:subprocess.Popen<br>
                 - ls
             </code>
-                <li> On Uploading this file the user should be able to see the output of the command executed in the
-                    Terminal running Django.</li>
+                <li> A loader that resolves those tags (<code>yaml.load</code> with the full
+                    <code>Loader</code>) would build the object and run the command. The converter now parses uploads
+                    with <code>yaml.safe_load</code>, which only produces plain data, so this payload is rejected with an
+                    error instead of executing.</li>
 
             </ul>
 

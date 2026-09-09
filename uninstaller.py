@@ -29,6 +29,30 @@ def is_user_admin():
             return False
 
 
+# Resolve pip to a concrete, checked executable instead of a bare name
+def resolve_pip_executable():
+    """Return the path of the pip executable to use, or None if there is none.
+
+    ``which()`` consults ``PATH``, which is environment data from outside this
+    script, and the uninstaller normally runs with admin/root rights. Handing
+    ``subprocess`` the concrete file that was resolved and checked here - rather
+    than the bare names ``pip3``/``pip`` re-resolved through ``PATH`` at spawn
+    time - keeps argv[0] a path this script validated, and lets the caller fail
+    closed when no pip is installed.
+
+    The lookup order (``pip3`` first, then ``pip``) is unchanged.
+    """
+    for name in ('pip3', 'pip'):
+        candidate = which(name)
+        if candidate is None:
+            continue
+        candidate = os.path.abspath(candidate)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+
+    return None
+
+
 # Uninstall Pip packages in a platform independent way
 def uninstall_pip_packages():
     """Remove pip packages installed by pygoat"""
@@ -36,20 +60,29 @@ def uninstall_pip_packages():
 
     try:
         # It is important to upgrade pip first to avoid environment errors
+        # Fixed argv lists with shell=False: no element is ever parsed as shell
+        # syntax, so nothing in the environment can extend these commands.
         if (platform.system != 'Windows'):
-            pip_v = "pip3" if (which('pip3') is not None) else "pip"
-            subprocess.run([pip_v,
-                            "install",
-                            "--upgrade",
-                            "pip"],
-                           stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL)
+            pip_v = resolve_pip_executable()
+            if pip_v is None:
+                print(colorama.Fore.RED + colorama.Style.BRIGHT
+                      + "[!] No pip executable found, skipping the pip upgrade"
+                      + colorama.Style.RESET_ALL)
+            else:
+                subprocess.run([pip_v,
+                                "install",
+                                "--upgrade",
+                                "pip"],
+                               shell=False,
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
         subprocess.check_call([sys.executable,
                                "-m",
                                "pip",
                                "uninstall",
                                "-yr",
-                               "requirements.txt"])
+                               "requirements.txt"],
+                              shell=False)
     except subprocess.CalledProcessError:
         print(colorama.Fore.RED + colorama.Style.BRIGHT + "[!] Failed to uninstall pip packages" + colorama.Style.RESET_ALL)
 
@@ -59,12 +92,14 @@ def uninstall_pip():
     """Remove Pip"""
     print(colorama.Back.RED + colorama.Style.BRIGHT + "[+] Uninstalling Pip!" + colorama.Style.RESET_ALL)
     try:
+        # Fixed argv list with shell=False: never a shell command string.
         subprocess.check_call([sys.executable,
                                "-m",
                                "pip",
                                "uninstall",
                                "-y",
-                               "pip"])
+                               "pip"],
+                              shell=False)
     except subprocess.CalledProcessError:
         print(colorama.Fore.RED + colorama.Style.BRIGHT + "[!] Failed to uninstall pip" + colorama.Style.RESET_ALL)
 

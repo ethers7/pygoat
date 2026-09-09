@@ -24,10 +24,20 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . /app/
 
 
+# Run the app as an unprivileged user instead of root.
+# uid/gid 1000 matches the usual host user so the bind-mounted /app
+# (see docker-compose.yml) stays writable for db.sqlite3 and staticfiles.
+RUN groupadd --gid 1000 appuser \
+    && useradd --uid 1000 --gid 1000 --create-home --shell /bin/sh appuser
+
+
 # install pygoat
 EXPOSE 8000
 
 
-RUN python3 /app/manage.py migrate
+# Migrate during the build, then hand /app to appuser: the sqlite database
+# and its journal files are created next to db.sqlite3 at runtime.
+RUN python3 /app/manage.py migrate && chown -R appuser:appuser /app
 WORKDIR /app
+USER appuser
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers","6", "pygoat.wsgi"]

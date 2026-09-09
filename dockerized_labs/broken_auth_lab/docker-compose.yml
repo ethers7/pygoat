@@ -12,4 +12,7 @@ services:
       - FLASK_APP=app.py
       - FLASK_ENV=development
       - PYTHONUNBUFFERED=1
+      # app.py binds loopback unless told otherwise; the container needs every
+      # interface so the 5000:5000 mapping above serves http://localhost:5000.
+      - FLASK_RUN_HOST=0.0.0.0
     restart: unless-stopped 

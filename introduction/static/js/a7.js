@@ -1,16 +1,19 @@
 event4 = function(){
     var code = document.getElementById('a7_input').value
-    var myHeaders = new Headers();
-    // myHeaders.append("Cookie", "csrftoken=5fVOTXh2HNahtvJFJNRSrKkwPAgPM9YCHlrCGprAxhAAKOUWMxqMnWm8BUomv0Yd; jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MSwiZXhwIjoxNjUzMzEzMDIxLCJpYXQiOjE2NTMzMDk0MjF9.dh2gfP9wKD8GKu1J-jVs2jJUYMgKu_kMaJjrD0hHP-I");
+    // The browser attaches this origin's session and CSRF cookies to the
+    // same-origin request below; never hard-code session tokens here.
+    // withCsrfHeader() adds the X-CSRFToken header this POST needs now that the
+    // API is CSRF protected (see js/csrf.js).
+    var myHeaders = withCsrfHeader(new Headers());
 
     var formdata = new FormData();
-    // formdata.append("csrfmiddlewaretoken", "5fVOTXh2HNahtvJFJNRSrKkwPAgPM9YCHlrCGprAxhAAKOUWMxqMnWm8BUomv0Yd");
     formdata.append("code", code);
 
     var requestOptions = {
     method: 'POST',
     headers: myHeaders,
     body: formdata,
+    credentials: 'same-origin',
     redirect: 'follow'
     };
 

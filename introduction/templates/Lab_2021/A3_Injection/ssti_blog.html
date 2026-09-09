@@ -1,0 +1,25 @@
+{% extends "introduction/base.html" %}
+{% block content %}
+{% block title %}
+<title>SSTI-Blogs</title>
+{% endblock %}
+
+{% comment %}
+The blog body is untrusted request data. It arrives as context and is printed by
+the template engine, which escapes it, so submitted markup is shown as text.
+It must never be rendered as template source and never be marked safe - that is
+the stored cross-site scripting this lab used to serve.
+{% endcomment %}
+
+<div class="container">
+    {% if error %}
+    <p class="ssti-error" style="color: #e74c3c;">{{ error }}</p>
+    {% else %}
+    <pre class="ssti-blog-body" style="white-space: pre-wrap;">{{ blog }}</pre>
+    {% endif %}
+</div>
+
+<div style= "position : fixed ; right : 7px; bottom : 7px"> <button class="btn btn-info" type="button" onclick="window.location.href='/ssti/lab'">Back to My
+    Blogs</button></div>
+
+{% endblock %}

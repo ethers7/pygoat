@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/3.0/ref/settings/
 """
 
+import hashlib
 import os
 
 import django_heroku
@@ -169,4 +170,26 @@ SOCIALACCOUNT_PROVIDERS = {
 }
 
 SECRET_COOKIE_KEY = "PYGOAT"
+
+# CWE-614: Secure attribute for the cookies the lab views hand out with
+# response.set_cookie() (introduction/views.py, introduction/mitre.py). HttpOnly
+# and SameSite are unconditional at those call sites, but Secure has to follow
+# the transport actually in use: docker-compose.yml publishes gunicorn on plain
+# http://0.0.0.0:8000 (the README tells students to open http://localhost:8000)
+# and a browser silently drops a Secure cookie on a plaintext origin, which would
+# break every cookie driven lab. So it defaults to off and is switched on with
+# LAB_COOKIE_SECURE=true once the app is served over HTTPS. Same environment
+# sourced pattern as dockerized_labs/broken_auth_lab/app.py.
+LAB_COOKIE_SECURE = os.environ.get('LAB_COOKIE_SECURE', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
+
+# Signing key for the CSRF lab session JWT (see introduction/mitre.py).
+# Supplied at runtime through the environment so that no signing key literal
+# lives in the source tree. When CSRF_LAB_JWT_KEY is not set, the key is
+# derived from SECRET_KEY - the same source django.core.signing uses - so the
+# value stays identical across gunicorn workers without committing new key
+# material. Set CSRF_LAB_JWT_KEY (and a runtime SECRET_KEY) for any deployment
+# that is reachable by others.
+CSRF_LAB_JWT_KEY = os.environ.get('CSRF_LAB_JWT_KEY') or hashlib.sha256(
+    b'pygoat.csrf_lab.jwt.v1:' + SECRET_KEY.encode()
+).hexdigest()
 CSRF_TRUSTED_ORIGINS = ["http://127.0.0.1:8000","http://0.0.0.0:8000","http://172.16.189.10"]

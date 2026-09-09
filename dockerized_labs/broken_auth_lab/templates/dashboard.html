@@ -75,9 +75,9 @@
 
 <script>
 function logout() {
-    // Clear the session cookie and redirect to login
-    document.cookie = "session=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-    window.location.href = "/lab";
+    // The session cookie is HttpOnly, so it cannot be cleared from JavaScript;
+    // let the server expire it and redirect back to the login page.
+    window.location.href = "{{ url_for('logout') }}";
 }
 </script>
 {% endblock %} 
