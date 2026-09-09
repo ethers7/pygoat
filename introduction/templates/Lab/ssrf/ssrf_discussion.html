@@ -120,29 +120,33 @@ def ssrf_lab(request):
                 </div>
                 <div id="textarea2">
                     <h6>ssrf_lab.html</h6>
-                    <textarea id="html">
+                    {# The sample below is the secure answer the student types back. #}
+                    {# {% verbatim %} stops Django expanding the tags, so the csrf_token #}
+                    {# tag every POST form needs (CWE-352) is shown literally, exactly #}
+                    {# as it has to appear in ssrf_lab.html. #}
+                    <textarea id="html">{% verbatim %}
 <div style="display:flex;flex-direction:row;align-items:center;margin:15px">
     <form method="post" action="/ssrf_lab">
-        {&#37; csrf_token &#37;}
+        {% csrf_token %}
         <input type="hidden" name="blog" value="templates/Lab/ssrf/blogs/blog1.txt">
         <button type="submit" class="btn btn-info"> Blog1 </button>
     </form>
     <form method="post" action="/ssrf_lab">
-        {&#37; csrf_token &#37;}
+        {% csrf_token %}
         <input type="hidden" name="blog" value="templates/Lab/ssrf/blogs/blog2.txt">
         <button type="submit" class="btn btn-info"> Blog2 </button>
     </form>
     <form method="post" action="/ssrf_lab">
-        {&#37; csrf_token &#37;}
+        {% csrf_token %}
         <input type="hidden" name="blog" value="templates/Lab/ssrf/blogs/blog3.txt">
         <button type="submit" class="btn btn-info"> Blog3 </button>
     </form>
     <form method="post" action="/ssrf_lab">
-        {&#37; csrf_token &#37;}
+        {% csrf_token %}
         <input type="hidden" name="blog" value="templates/Lab/ssrf/blogs/blog4.txt">
         <button type="submit" class="btn btn-info"> Blog4 </button>
     </form>
-</div></textarea> 
+</div>{% endverbatim %}</textarea>
                 </div>
             </div>
             <button class="btn btn-info" onclick=checkcode()> Submit </button>

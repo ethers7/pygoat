@@ -1,4 +1,5 @@
 import os
+import re
 from unittest import mock
 
 from django.contrib.auth.models import User
@@ -382,3 +383,75 @@ class MitreLab25ApiViewTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("Expression rejected", response.json()["error"])
+
+
+FORM_TAG_RE = re.compile(r"<form\b[^>]*>", re.IGNORECASE)
+POST_METHOD_RE = re.compile(r"""method\s*=\s*["']?post""", re.IGNORECASE)
+# Either the template tag or the field name it renders (scripts that POST read
+# the field back and resend it as an X-CSRFToken header, see js/csrf.js).
+CSRF_TOKEN_RE = re.compile(r"{%\s*csrf_token\s*%}|csrfmiddlewaretoken")
+
+_INTRODUCTION_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_DIR = os.path.dirname(_INTRODUCTION_DIR)
+# Template roots of this Django project. The Flask labs under dockerized_labs/
+# are separate applications with their own CSRF handling and are not rendered by
+# the Django engine, so they are out of this suite's scope.
+DJANGO_TEMPLATE_ROOTS = (
+    os.path.join(_INTRODUCTION_DIR, "templates"),
+    os.path.join(_PROJECT_DIR, "challenge", "templates"),
+)
+
+
+def post_forms_without_csrf_token(source):
+    """Return the 1-based line of every POST <form> that renders no CSRF token."""
+    offending_lines = []
+    for match in FORM_TAG_RE.finditer(source):
+        if not POST_METHOD_RE.search(match.group(0)):
+            continue
+        closing = source.lower().find("</form>", match.end())
+        body = source[match.end():closing if closing != -1 else len(source)]
+        if not CSRF_TOKEN_RE.search(body):
+            offending_lines.append(source[:match.start()].count("\n") + 1)
+    return offending_lines
+
+
+class TemplateCsrfTokenTests(SimpleTestCase):
+    """Every manually written POST form must carry a csrf_token (CWE-352).
+
+    Django's CsrfViewMiddleware rejects a POST without the token, so a form that
+    omits it is both broken and the pattern that made the labs exploitable
+    while the views were decorated with @csrf_exempt.
+    """
+
+    def _django_templates(self):
+        for root in DJANGO_TEMPLATE_ROOTS:
+            self.assertTrue(os.path.isdir(root), "missing template root %s" % root)
+            for dirpath, _dirnames, filenames in os.walk(root):
+                for filename in sorted(filenames):
+                    if filename.endswith(".html"):
+                        yield os.path.join(dirpath, filename)
+
+    def test_every_post_form_renders_a_csrf_token(self):
+        checked_forms = 0
+        offenders = {}
+        for template in self._django_templates():
+            with open(template, encoding="utf-8") as handle:
+                source = handle.read()
+            checked_forms += len(
+                [tag for tag in FORM_TAG_RE.findall(source) if POST_METHOD_RE.search(tag)])
+            missing = post_forms_without_csrf_token(source)
+            if missing:
+                offenders[os.path.relpath(template, _PROJECT_DIR)] = missing
+
+        self.assertEqual(offenders, {})
+        # Guards against a walk that silently stops finding templates.
+        self.assertGreaterEqual(checked_forms, 30)
+
+    def test_detector_reports_a_form_that_omits_the_token(self):
+        self.assertEqual(
+            post_forms_without_csrf_token('<form method="post">\n<input>\n</form>'), [1])
+        self.assertEqual(
+            post_forms_without_csrf_token(
+                '<form method="post">{% csrf_token %}<input></form>'), [])
+        # A GET form needs no token.
+        self.assertEqual(post_forms_without_csrf_token('<form method="get"></form>'), [])

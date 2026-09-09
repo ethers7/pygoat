@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, make_response, flash
+from flask import Flask, abort, render_template, request, redirect, url_for, make_response, flash, session
 import hmac
 import json
 import os
@@ -20,6 +20,47 @@ app.secret_key = 'your-secret-key-here'  # Vulnerable: Hardcoded secret key
 SESSION_COOKIE_SECURE = os.environ.get('SESSION_COOKIE_SECURE', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
+
+# CWE-352: /login, /register and /reset-password all change state, so the forms
+# in templates/lab.html and templates/reset.html have to prove the request came
+# from a page this app rendered. Jinja2 has no Django style {% csrf_token %}
+# tag, so the per-session token is exposed to the templates as csrf_token() and
+# checked here for every unsafe request.
+CSRF_FIELD_NAME = 'csrf_token'
+CSRF_SESSION_KEY = '_csrf_token'
+CSRF_SAFE_METHODS = frozenset(('GET', 'HEAD', 'OPTIONS', 'TRACE'))
+
+
+def csrf_token():
+    """Return this session's CSRF token, creating it on first use."""
+    token = session.get(CSRF_SESSION_KEY)
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session[CSRF_SESSION_KEY] = token
+    return token
+
+
+app.jinja_env.globals['csrf_token'] = csrf_token
+
+
+@app.before_request
+def require_csrf_token():
+    """Reject unsafe requests with a missing or wrong CSRF token.
+
+    The submitted value is compared with hmac.compare_digest so a token cannot
+    be recovered one character at a time from response timing.
+    """
+    if request.method in CSRF_SAFE_METHODS:
+        return None
+
+    expected = session.get(CSRF_SESSION_KEY, '')
+    submitted = (request.form.get(CSRF_FIELD_NAME, '')
+                 or request.headers.get('X-CSRFToken', ''))
+    if not expected or not submitted.isascii():
+        abort(400)
+    if not hmac.compare_digest(expected, submitted):
+        abort(400)
+    return None
 
 # Vulnerable: Storing user data in memory
 users = {

@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request
+from flask import Flask, abort, render_template, request, session
 import base64
 import binascii
 import hashlib
@@ -14,6 +14,52 @@ app = Flask(__name__)
 # environment so nothing is hard-coded; when it is absent a random per-process
 # key is generated (tokens then simply stop validating after a restart).
 TOKEN_SIGNING_KEY = os.environ.get('LAB_TOKEN_SIGNING_KEY', '').encode() or secrets.token_bytes(32)
+
+# Flask signs the session cookie that carries the CSRF token below, so a key is
+# required. Same handling as TOKEN_SIGNING_KEY: read from the environment, and
+# fall back to a random per-process value rather than a hard-coded default.
+app.secret_key = os.environ.get('LAB_SESSION_KEY', '') or secrets.token_urlsafe(32)
+
+# CWE-352: /serialize and /deserialize change state, so the forms in
+# templates/index.html have to prove the request came from a page this app
+# rendered. Jinja2 has no Django style {% csrf_token %} tag, so the per-session
+# token is exposed to the templates as csrf_token() and checked here for every
+# unsafe request.
+CSRF_FIELD_NAME = 'csrf_token'
+CSRF_SESSION_KEY = '_csrf_token'
+CSRF_SAFE_METHODS = frozenset(('GET', 'HEAD', 'OPTIONS', 'TRACE'))
+
+
+def csrf_token():
+    """Return this session's CSRF token, creating it on first use."""
+    token = session.get(CSRF_SESSION_KEY)
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session[CSRF_SESSION_KEY] = token
+    return token
+
+
+app.jinja_env.globals['csrf_token'] = csrf_token
+
+
+@app.before_request
+def require_csrf_token():
+    """Reject unsafe requests with a missing or wrong CSRF token.
+
+    The submitted value is compared with hmac.compare_digest so a token cannot
+    be recovered one character at a time from response timing.
+    """
+    if request.method in CSRF_SAFE_METHODS:
+        return None
+
+    expected = session.get(CSRF_SESSION_KEY, '')
+    submitted = (request.form.get(CSRF_FIELD_NAME, '')
+                 or request.headers.get('X-CSRFToken', ''))
+    if not expected or not submitted.isascii():
+        abort(400)
+    if not hmac.compare_digest(expected, submitted):
+        abort(400)
+    return None
 
 
 @dataclass
