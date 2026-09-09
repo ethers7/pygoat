@@ -31,10 +31,11 @@ from requests.structures import CaseInsensitiveDict
 from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
-from .utility import (check_lab_password, customHash, filter_blog,
-                      safe_eval_arithmetic, safe_lab_text, safe_lookup_target,
-                      safe_outbound_url, safe_parse_comment_xml,
-                      write_lab_file)
+from .utility import (MAX_OUTBOUND_RESPONSE_BYTES, OUTBOUND_FETCH_TIMEOUT,
+                      check_lab_password, customHash, filter_blog,
+                      read_bounded_body, safe_eval_arithmetic, safe_lab_text,
+                      safe_lookup_target, safe_outbound_url,
+                      safe_parse_comment_xml, write_lab_file)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -988,8 +989,10 @@ def ssrf_target(request):
         return render(request,"Lab/ssrf/ssrf_target.html",{"access_denied":True})
 
 SSRF_LAB_MAX_REDIRECTS = 3
-SSRF_LAB_TIMEOUT = 5
 SSRF_LAB_REJECTED = "URL rejected: only http(s) URLs of allowlisted public hosts can be fetched."
+SSRF_LAB_TOO_LARGE = (
+    "Response rejected: the target sent more than %d bytes."
+    % MAX_OUTBOUND_RESPONSE_BYTES)
 
 
 @authentication_decorator
@@ -1005,15 +1008,31 @@ def ssrf_lab2(request):
         target = safe_outbound_url(request.POST["url"])
         if target is None:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": SSRF_LAB_REJECTED})
+        # Resource guard (CWE-400): the fetch carries an explicit connect/read
+        # timeout so a silent or slow target cannot pin this worker forever, the
+        # redirect chain is bounded, and the body is streamed and buffered only
+        # up to MAX_OUTBOUND_RESPONSE_BYTES instead of pulling a response of
+        # unknown size into memory with .content.
         try:
             for _ in range(SSRF_LAB_MAX_REDIRECTS + 1):
-                response = requests.get(target, timeout=SSRF_LAB_TIMEOUT, allow_redirects=False)
-                if not response.is_redirect:
-                    return render(
-                        request,
-                        "Lab/ssrf/ssrf_lab2.html",
-                        {"response": response.content.decode(errors="replace")})
-                target = safe_outbound_url(urljoin(target, response.headers.get("location", "")))
+                with requests.get(
+                        target,
+                        timeout=OUTBOUND_FETCH_TIMEOUT,
+                        allow_redirects=False,
+                        stream=True) as response:
+                    if not response.is_redirect:
+                        body = read_bounded_body(response)
+                        if body is None:
+                            return render(
+                                request,
+                                "Lab/ssrf/ssrf_lab2.html",
+                                {"error": SSRF_LAB_TOO_LARGE})
+                        return render(
+                            request,
+                            "Lab/ssrf/ssrf_lab2.html",
+                            {"response": body.decode(errors="replace")})
+                    location = response.headers.get("location", "")
+                target = safe_outbound_url(urljoin(target, location))
                 if target is None:
                     return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": SSRF_LAB_REJECTED})
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Too many redirects"})

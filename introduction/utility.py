@@ -178,6 +178,41 @@ def safe_outbound_url(value):
     return urlunsplit((parts.scheme.lower(), netloc, parts.path, parts.query, ''))
 
 
+# Every outbound fetch a lab performs has to be bounded (CWE-400). Without an
+# explicit timeout a slow or silent peer keeps the request handler - and the
+# worker serving it - blocked forever, and buffering a body of unknown size
+# (requests' .content / .json()) lets a hostile or misbehaving target grow this
+# process' memory until it dies. Callers therefore fetch with
+# OUTBOUND_FETCH_TIMEOUT and read the body through read_bounded_body(), which
+# stops after MAX_OUTBOUND_RESPONSE_BYTES. These are the single definition of
+# those limits for the application code.
+OUTBOUND_FETCH_TIMEOUT = (5, 10)  # (connect, read) seconds
+MAX_OUTBOUND_RESPONSE_BYTES = 1024 * 1024
+_OUTBOUND_CHUNK_BYTES = 64 * 1024
+
+
+def read_bounded_body(response, max_bytes=MAX_OUTBOUND_RESPONSE_BYTES):
+    """Return the body of a streamed response, or None when it is oversized.
+
+    The response has to be requested with stream=True: the body is then consumed
+    in chunks and the read stops as soon as more than max_bytes have arrived, so
+    the rest is never buffered in memory.
+
+    Callers must treat None as "reject this response" and must not render, parse
+    or store a partially read body.
+    """
+    chunks = []
+    size = 0
+    for chunk in response.iter_content(_OUTBOUND_CHUNK_BYTES):
+        if not chunk:
+            continue
+        size += len(chunk)
+        if size > max_bytes:
+            return None
+        chunks.append(chunk)
+    return b''.join(chunks)
+
+
 # XML documents posted to the comment lab are untrusted input. They are parsed
 # with defusedxml, which refuses doctype declarations, entity declarations and
 # external references, so neither XXE (CWE-611) nor entity expansion ("billion

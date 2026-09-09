@@ -1,3 +1,5 @@
+import importlib
+import json
 import os
 import re
 import uuid
@@ -7,13 +9,28 @@ from django.contrib.auth.models import User
 from django.test import SimpleTestCase, TestCase
 
 from .models import authLogin, comments
-from .utility import (safe_eval_arithmetic, safe_lab_source, safe_lab_text,
+from .utility import (MAX_OUTBOUND_RESPONSE_BYTES, read_bounded_body,
+                      safe_eval_arithmetic, safe_lab_source, safe_lab_text,
                       safe_outbound_url, safe_parse_comment_xml,
                       write_lab_file)
 
 # A publicly routable literal used as an allowlisted destination so the tests
 # never depend on DNS resolution.
 PUBLIC_TEST_HOST = "1.1.1.1"
+
+
+def streamed_response(is_redirect=False, headers=None, chunks=()):
+    """A requests response double usable as the context manager the views open.
+
+    Bodies are only exposed through iter_content(), like a real stream=True
+    response, so a test cannot accidentally assert on an unbounded .content read.
+    """
+    response = mock.MagicMock()
+    response.__enter__.return_value = response
+    response.is_redirect = is_redirect
+    response.headers = headers or {}
+    response.iter_content.return_value = list(chunks)
+    return response
 
 
 class SafeOutboundUrlTests(SimpleTestCase):
@@ -90,10 +107,9 @@ class SsrfLab2ViewTests(TestCase):
     @mock.patch.dict(os.environ, {"PYGOAT_ALLOWED_FETCH_HOSTS": PUBLIC_TEST_HOST})
     @mock.patch("introduction.views.requests.get")
     def test_redirect_to_internal_address_is_not_followed(self, mocked_get):
-        redirect_response = mock.Mock()
-        redirect_response.is_redirect = True
-        redirect_response.headers = {"location": "http://169.254.169.254/latest/meta-data/"}
-        mocked_get.return_value = redirect_response
+        mocked_get.return_value = streamed_response(
+            is_redirect=True,
+            headers={"location": "http://169.254.169.254/latest/meta-data/"})
 
         response = self.client.post("/ssrf_lab2", {"url": "http://%s/blog" % PUBLIC_TEST_HOST})
 
@@ -104,10 +120,7 @@ class SsrfLab2ViewTests(TestCase):
     @mock.patch.dict(os.environ, {"PYGOAT_ALLOWED_FETCH_HOSTS": PUBLIC_TEST_HOST})
     @mock.patch("introduction.views.requests.get")
     def test_allowlisted_target_is_fetched_with_timeout(self, mocked_get):
-        fetched = mock.Mock()
-        fetched.is_redirect = False
-        fetched.content = b"blog body"
-        mocked_get.return_value = fetched
+        mocked_get.return_value = streamed_response(chunks=[b"blog ", b"body"])
 
         response = self.client.post("/ssrf_lab2", {"url": "http://%s/blog" % PUBLIC_TEST_HOST})
 
@@ -116,7 +129,46 @@ class SsrfLab2ViewTests(TestCase):
         args, kwargs = mocked_get.call_args
         self.assertEqual(args[0], "http://%s/blog" % PUBLIC_TEST_HOST)
         self.assertFalse(kwargs["allow_redirects"])
-        self.assertTrue(kwargs["timeout"])
+        # An explicit (connect, read) timeout and a streamed body keep a slow or
+        # endless target from exhausting the worker (CWE-400).
+        self.assertEqual(len(kwargs["timeout"]), 2)
+        self.assertTrue(all(kwargs["timeout"]))
+        self.assertTrue(kwargs["stream"])
+
+    @mock.patch.dict(os.environ, {"PYGOAT_ALLOWED_FETCH_HOSTS": PUBLIC_TEST_HOST})
+    @mock.patch("introduction.views.requests.get")
+    def test_oversized_response_body_is_rejected_instead_of_buffered(self, mocked_get):
+        chunk = b"x" * (64 * 1024)
+        oversized = [chunk] * (MAX_OUTBOUND_RESPONSE_BYTES // len(chunk) + 1)
+        mocked_get.return_value = streamed_response(chunks=oversized)
+
+        response = self.client.post("/ssrf_lab2", {"url": "http://%s/blog" % PUBLIC_TEST_HOST})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Response rejected")
+        self.assertNotContains(response, "xxxx")
+
+
+class ReadBoundedBodyTests(SimpleTestCase):
+    """Regression tests for the bounded response reader (CWE-400)."""
+
+    def test_returns_the_whole_body_when_it_fits(self):
+        self.assertEqual(
+            read_bounded_body(streamed_response(chunks=[b"ab", b"", b"cd"])), b"abcd")
+
+    def test_returns_none_once_the_limit_is_exceeded(self):
+        self.assertIsNone(
+            read_bounded_body(streamed_response(chunks=[b"abc", b"de"]), max_bytes=4))
+
+    def test_stops_reading_instead_of_draining_an_endless_stream(self):
+        def endless():
+            while True:
+                yield b"x" * 1024
+
+        response = mock.MagicMock()
+        response.iter_content.return_value = endless()
+
+        self.assertIsNone(read_bounded_body(response, max_bytes=4096))
 
 
 EXTERNAL_ENTITY_XML = (
@@ -587,3 +639,43 @@ class LabFileWriteViewTests(TestCase):
         self.assertEqual(response.json()["message"], "success")
         mocked_write.assert_called_once_with(
             "playground/A6/utility.py", "def check_vuln(packages):\n    return []\n")
+
+
+class A6DependencyCheckerTests(SimpleTestCase):
+    """The A6 lab's PyPI lookups must be bounded (CWE-400).
+
+    Both the importable lab module and the reference solution it ships with are
+    checked, since the lab replaces the former with the learner's submission.
+    """
+
+    MODULE_NAMES = (
+        "introduction.playground.A6.utility",
+        "introduction.playground.A6.soln",
+    )
+
+    def test_every_lookup_carries_a_timeout_and_streams_the_body(self):
+        body = json.dumps({"vulnerabilities": [{"id": "PYSEC-0000-1"}]}).encode("utf-8")
+        for name in self.MODULE_NAMES:
+            module = importlib.import_module(name)
+            with self.subTest(module=name):
+                with mock.patch.object(module.requests, "get") as mocked_get:
+                    mocked_get.return_value = streamed_response(chunks=[body])
+                    result = module.check_vuln(["requests==2.28.0"])
+
+                self.assertEqual(result, [[{"id": "PYSEC-0000-1"}]])
+                args, kwargs = mocked_get.call_args
+                self.assertEqual(args[0], "https://pypi.org/pypi/requests/2.28.0/json")
+                self.assertEqual(len(kwargs["timeout"]), 2)
+                self.assertTrue(all(kwargs["timeout"]))
+                self.assertTrue(kwargs["stream"])
+
+    def test_oversized_pypi_response_is_refused_instead_of_buffered(self):
+        chunk = b"x" * 1024
+        for name in self.MODULE_NAMES:
+            module = importlib.import_module(name)
+            with self.subTest(module=name):
+                oversized = [chunk] * (module.MAX_PYPI_RESPONSE_BYTES // len(chunk) + 1)
+                with mock.patch.object(module.requests, "get") as mocked_get:
+                    mocked_get.return_value = streamed_response(chunks=oversized)
+                    with self.assertRaises(ValueError):
+                        module.check_vuln(["requests==2.28.0"])
