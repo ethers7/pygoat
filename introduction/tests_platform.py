@@ -12,7 +12,6 @@ import base64
 import inspect
 import pathlib
 import re
-from hashlib import md5
 
 import jwt
 from django.conf import settings
@@ -22,8 +21,8 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from .models import CSRF_user_tbl
-from .utility import safe_lookup_target
+from .models import CF_user, CSRF_user_tbl
+from .utility import make_lab_password, safe_lookup_target
 
 
 @override_settings(
@@ -201,7 +200,7 @@ class CsrfLabJwtKeyTests(TestCase):
         )
         self.lab_user = CSRF_user_tbl.objects.create(
             username=self.LAB_USERNAME,
-            password=md5(self.PASSWORD.encode()).hexdigest(),
+            password=make_lab_password(self.PASSWORD),
             balance=100,
         )
         self.client.force_login(self.user)
@@ -341,3 +340,100 @@ class InsecureDeserializationRegressionTests(TestCase):
         self.assertNotIn("pickle.loads", source)
         self.assertNotIn("pickle.dumps", source)
         self.assertNotRegex(source, r"yaml\.load\(")
+
+
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+    CSRF_LAB_JWT_KEY="unit-test-csrf-lab-signing-key",
+)
+class LabPasswordHashingTests(TestCase):
+    """CWE-327: lab logins must verify a vetted password hash, not MD5.
+
+    Gates that the crypto-failure lab and the CSRF lab still authenticate an
+    account stored with make_lab_password(), that a legacy bare MD5 digest can no
+    longer be used to log in, and that neither module hashes passwords with MD5.
+    """
+
+    PASSWORD = "Str0ng-Passw0rd!"
+    LAB_USERNAME = "cryptolabuser"
+    # Unsalted MD5 digest of PASSWORD - the format these labs stored before the
+    # move to PBKDF2. Kept as a literal so the test never hashes with MD5 itself.
+    LEGACY_MD5_DIGEST = "d2586fe34b068ee71c57c35d355d6ec3"
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="hashgateuser",
+            email="hashgateuser@example.com",
+            password=self.PASSWORD,
+        )
+        self.client.force_login(self.user)
+
+    def _crypto_lab_post(self, password):
+        return self.client.post(
+            reverse("cryptographic_failure_lab"),
+            {"username": self.LAB_USERNAME, "password": password},
+        )
+
+    def test_stored_hash_is_adaptive_and_salted(self):
+        encoded = make_lab_password(self.PASSWORD)
+        self.assertTrue(encoded.startswith("pbkdf2_"))
+        self.assertNotEqual(encoded, self.LEGACY_MD5_DIGEST)
+        # Salted: the same password never yields the same stored value twice.
+        self.assertNotEqual(encoded, make_lab_password(self.PASSWORD))
+
+    def test_crypto_lab_logs_in_account_with_vetted_hash(self):
+        CF_user.objects.create(
+            username=self.LAB_USERNAME,
+            password=make_lab_password(self.PASSWORD),
+            password2="",
+        )
+        r = self._crypto_lab_post(self.PASSWORD)
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, self.LAB_USERNAME)
+
+    def test_crypto_lab_rejects_wrong_password(self):
+        CF_user.objects.create(
+            username=self.LAB_USERNAME,
+            password=make_lab_password(self.PASSWORD),
+            password2="",
+        )
+        r = self._crypto_lab_post("not-the-password")
+        self.assertEqual(r.status_code, 200)
+        self.assertNotContains(r, self.LAB_USERNAME)
+
+    def test_crypto_lab_rejects_legacy_md5_digest(self):
+        CF_user.objects.create(
+            username=self.LAB_USERNAME,
+            password=self.LEGACY_MD5_DIGEST,
+            password2="",
+        )
+        for attempt in (self.PASSWORD, self.LEGACY_MD5_DIGEST):
+            with self.subTest(attempt=attempt):
+                r = self._crypto_lab_post(attempt)
+                self.assertEqual(r.status_code, 200)
+                self.assertNotContains(r, self.LAB_USERNAME)
+
+    def test_csrf_lab_rejects_legacy_md5_digest(self):
+        CSRF_user_tbl.objects.create(
+            username=self.LAB_USERNAME,
+            password=self.LEGACY_MD5_DIGEST,
+            balance=100,
+        )
+        r = self.client.post(
+            reverse("csrf_lab_login"),
+            {"username": self.LAB_USERNAME, "password": self.PASSWORD},
+        )
+        self.assertEqual(r.status_code, 302)
+        self.assertIn("/mitre/9/lab/login", r["Location"])
+        self.assertNotIn("auth_cookiee", r.cookies)
+
+    def test_lab_modules_do_not_hash_passwords_with_md5(self):
+        from . import mitre, views
+
+        for module in (views, mitre):
+            with self.subTest(module=module.__name__):
+                source = inspect.getsource(module)
+                self.assertNotRegex(source, r"md5\(\s*password")
+                self.assertNotRegex(source, r"hashlib\.md5\(")
+                self.assertNotRegex(source, r"sha1\(\s*password")

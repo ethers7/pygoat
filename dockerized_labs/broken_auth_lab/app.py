@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, make_response, flash
-import hashlib
+import hmac
 import json
+import secrets
 from datetime import datetime, timedelta
 import base64
 
@@ -79,11 +80,12 @@ def register():
 def reset_password():
     email = request.form.get('email')
     
-    # Vulnerable: Password reset token generation
     for username, user_data in users.items():
         if user_data['email'] == email:
-            # Vulnerable: Predictable token generation
-            token = hashlib.md5(f"{email}:{datetime.now()}".encode()).hexdigest()
+            # CWE-327/CWE-330: the reset token is 256 bits from the OS CSPRNG
+            # instead of an MD5 digest of the email and timestamp, which is both
+            # a broken hash and guessable from values an attacker knows.
+            token = secrets.token_urlsafe(32)
             password_reset_tokens[token] = username
             
             # In a real application, this would send an email
@@ -94,9 +96,24 @@ def reset_password():
     flash('Email not found')
     return redirect(url_for('lab'))
 
+def lookup_reset_token(token):
+    """Return the username a reset token belongs to, or None.
+
+    The candidate is compared with hmac.compare_digest so a submitted token is
+    matched in constant time and its correct prefix length cannot be recovered
+    from response timing.
+    """
+    if not token or not token.isascii():
+        return None
+    for candidate, username in password_reset_tokens.items():
+        if hmac.compare_digest(candidate, token):
+            return username
+    return None
+
+
 @app.route('/reset/<token>')
 def reset_form(token):
-    if token in password_reset_tokens:
+    if lookup_reset_token(token) is not None:
         return render_template('reset.html', token=token)
     return 'Invalid token'
 

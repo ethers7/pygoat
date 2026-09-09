@@ -11,8 +11,41 @@ from urllib.parse import urlsplit, urlunsplit
 
 from defusedxml import DefusedXmlException
 from defusedxml.ElementTree import ParseError, fromstring
+from django.contrib.auth.hashers import check_password, make_password
 
 from .models import *
+
+
+# Lab account passwords are hashed with the hashers configured for this project
+# (PBKDF2-SHA256 by default), never with a bare message digest. MD5/SHA1 are
+# fast and unsalted, so a stolen digest can be reversed with a rainbow table or
+# brute forced in seconds, which is what CWE-327 warns about; PBKDF2 is salted
+# and adaptive, and its verification is constant time.
+def make_lab_password(raw_password):
+    """Return a salted, adaptive hash for a lab account password.
+
+    Callers must store this value and must never store (or compare) a bare
+    hexadecimal digest of the password.
+    """
+    return make_password(raw_password)
+
+
+def check_lab_password(raw_password, encoded):
+    """True when raw_password matches a hash produced by make_lab_password().
+
+    Verification is delegated to django.contrib.auth.hashers, so the stored
+    salt/work factor are honoured and the digests are compared in constant
+    time. A stored value that no configured hasher can identify - for example a
+    legacy 32 character MD5 digest written before this lab moved to PBKDF2 - is
+    rejected, so authentication fails closed instead of falling back to a broken
+    algorithm.
+    """
+    if not raw_password or not encoded:
+        return False
+    try:
+        return check_password(raw_password, encoded)
+    except (TypeError, ValueError):
+        return False
 
 
 # Hostname / IP allowlist for the lookup commands (dig, nslookup, nmap). The

@@ -1,7 +1,6 @@
 import datetime
 import re
 import subprocess
-from hashlib import md5
 
 import jwt
 from django.conf import settings
@@ -10,7 +9,8 @@ from django.shortcuts import redirect, render
 from django.views.decorators.csrf import csrf_exempt
 
 from .models import CSRF_user_tbl
-from .utility import safe_eval_arithmetic, safe_lookup_target
+from .utility import (check_lab_password, safe_eval_arithmetic,
+                      safe_lookup_target)
 from .views import authentication_decorator
 
 # import os
@@ -160,9 +160,13 @@ def csrf_lab_login(request):
     elif request.method == 'POST':
         password = request.POST.get('password')
         username = request.POST.get('username')
-        password = md5(password.encode()).hexdigest()
-        User = CSRF_user_tbl.objects.filter(username=username, password=password)
-        if User:
+        # CWE-327: the lab account password is checked against the salted,
+        # adaptive hash stored for that row (see check_lab_password) instead of
+        # matching an unsalted MD5 digest in the query. A stored value no
+        # configured hasher can identify (e.g. a legacy MD5 digest) is rejected,
+        # so the login fails closed instead of using a broken algorithm.
+        User = CSRF_user_tbl.objects.filter(username=username).first()
+        if User is not None and check_lab_password(password, User.password):
             payload ={
                 'username': username,
                 'exp': datetime.datetime.utcnow() + datetime.timedelta(seconds=300),

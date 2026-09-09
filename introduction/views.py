@@ -10,7 +10,6 @@ import string
 import subprocess
 import uuid
 from dataclasses import dataclass
-from hashlib import md5
 from io import BytesIO
 from random import randint
 from urllib.parse import urljoin
@@ -34,9 +33,9 @@ from requests.structures import CaseInsensitiveDict
 from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
-from .utility import (customHash, filter_blog, safe_eval_arithmetic,
-                      safe_lookup_target, safe_outbound_url,
-                      safe_parse_comment_xml)
+from .utility import (check_lab_password, customHash, filter_blog,
+                      safe_eval_arithmetic, safe_lookup_target,
+                      safe_outbound_url, safe_parse_comment_xml)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -1079,8 +1078,14 @@ def crypto_failure_lab(request):
             username = request.POST["username"]
             password = request.POST["password"]
             try:
-                password = md5(password.encode()).hexdigest()
-                user = CF_user.objects.filter(username=username,password=password).first()
+                # CWE-327: the submitted password is verified against the salted,
+                # adaptive hash stored for the account (see check_lab_password)
+                # instead of being turned into an unsalted MD5 digest and matched
+                # in the database. An unidentifiable/legacy stored hash fails
+                # closed rather than authenticating through a broken algorithm.
+                user = CF_user.objects.filter(username=username).first()
+                if user is not None and not check_lab_password(password, user.password):
+                    user = None
                 return render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab.html",{"user":user, "success":True,"failure":False})
             except Exception as e:
                 return render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab.html",{"success":False, "failure":True})
