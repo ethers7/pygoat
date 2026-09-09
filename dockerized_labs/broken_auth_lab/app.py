@@ -209,4 +209,11 @@ def logout():
     return response
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)  # Vulnerable: Debug mode enabled in production 
+    # CWE-489: the Werkzeug debugger hands out an interactive Python console on
+    # any unhandled exception, so a shipped app that runs with debug=True is
+    # remote code execution. The debugger is therefore off unless it is asked
+    # for explicitly with FLASK_DEBUG=true in the environment, parsed the same
+    # way as SESSION_COOKIE_SECURE above. The lab still comes up on
+    # http://localhost:5000 (see docker-compose.yml and README.md) with it off.
+    FLASK_DEBUG = os.environ.get('FLASK_DEBUG', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
+    app.run(host='0.0.0.0', port=5000, debug=FLASK_DEBUG) 
