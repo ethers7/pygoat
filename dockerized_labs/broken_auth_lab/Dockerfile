@@ -14,8 +14,17 @@ ENV FLASK_APP=app.py
 ENV FLASK_ENV=development
 ENV PYTHONUNBUFFERED=1
 
-# Expose port 5000
+# Create an unprivileged user and give it ownership of the app directory
+# (Flask needs to write to /app, e.g. the reloader cache and static files)
+RUN groupadd --gid 1000 appuser \
+    && useradd --uid 1000 --gid 1000 --create-home --shell /bin/sh appuser \
+    && chown -R appuser:appuser /app
+
+# Expose port 5000 (unprivileged, so it can be bound without root)
 EXPOSE 5000
+
+# Do not run the app as root
+USER appuser
 
 # Run the application
 CMD ["python", "app.py"] 

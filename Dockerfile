@@ -30,4 +30,18 @@ EXPOSE 8000
 
 RUN python3 /app/manage.py migrate
 WORKDIR /app
+
+
+# Create an unprivileged user and give it ownership of the app directory
+# (Django needs to write db.sqlite3, staticfiles, logs and the generated
+# lab templates under /app at runtime)
+RUN groupadd --gid 1000 appuser \
+    && useradd --uid 1000 --gid 1000 --create-home --shell /bin/sh appuser \
+    && chown -R appuser:appuser /app
+
+
+# Do not run the app as root (8000 is unprivileged, so gunicorn can bind it)
+USER appuser
+
+
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers","6", "pygoat.wsgi"]
