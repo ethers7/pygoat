@@ -2,7 +2,9 @@ import hashlib
 import ipaddress
 import os
 import re
+import socket
 import uuid
+from urllib.parse import urlsplit, urlunsplit
 
 from .models import *
 
@@ -36,6 +38,105 @@ def safe_lookup_target(value):
     if _LOOKUP_TARGET_RE.match(target):
         return target
     return None
+
+
+# Destination allowlist for server-side fetches (SSRF, CWE-918). Override per
+# deployment with PYGOAT_ALLOWED_FETCH_HOSTS, a comma separated list of
+# hostnames/IPs; sub-domains of a listed name are accepted as well.
+_DEFAULT_ALLOWED_FETCH_HOSTS = ('example.com',)
+_ALLOWED_FETCH_SCHEMES = ('http', 'https')
+_ALLOWED_FETCH_PORTS = (80, 443)
+
+
+def allowed_fetch_hosts():
+    """Return the set of hosts this deployment may fetch server-side."""
+    raw = os.environ.get('PYGOAT_ALLOWED_FETCH_HOSTS', '')
+    hosts = {h.strip().lower().rstrip('.') for h in raw.split(',') if h.strip()}
+    return hosts or set(_DEFAULT_ALLOWED_FETCH_HOSTS)
+
+
+def _is_public_ip(value):
+    """True when value is an IP address that is publicly routable."""
+    try:
+        ip = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    mapped = getattr(ip, 'ipv4_mapped', None)
+    if mapped is not None:
+        ip = mapped
+    return not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+        or getattr(ip, 'is_site_local', False)
+    )
+
+
+def _host_is_allowed(host):
+    for allowed in allowed_fetch_hosts():
+        if host == allowed or host.endswith('.' + allowed):
+            return True
+    return False
+
+
+def _host_resolves_to_public_addresses(host):
+    """True when every address host resolves to is publicly routable."""
+    if _is_public_ip(host):
+        return True
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except (socket.gaierror, UnicodeError, ValueError):
+        return False
+    addresses = {info[4][0] for info in infos}
+    return bool(addresses) and all(_is_public_ip(address) for address in addresses)
+
+
+def safe_outbound_url(value):
+    """Return a URL safe to fetch server-side, or None when it must be rejected.
+
+    Guards against SSRF (CWE-918): the scheme has to be http/https, embedded
+    credentials and non standard ports are refused, the host has to be on the
+    deployment allowlist (see allowed_fetch_hosts) and every IP address it
+    resolves to has to be publicly routable. Loopback, link-local
+    (169.254.0.0/16 cloud metadata), RFC1918 and other internal destinations are
+    therefore unreachable even when a user supplies them directly.
+
+    Callers must treat None as "reject the request", must fetch the returned
+    value instead of the raw user input, and must re-validate every redirect
+    hop with this function.
+    """
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip()
+    if not candidate:
+        return None
+    try:
+        parts = urlsplit(candidate)
+        host = parts.hostname
+        port = parts.port
+        credentials = parts.username or parts.password
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in _ALLOWED_FETCH_SCHEMES:
+        return None
+    if credentials:
+        return None
+    if not host:
+        return None
+    if port is not None and port not in _ALLOWED_FETCH_PORTS:
+        return None
+    host = host.lower().rstrip('.')
+    if not _host_is_allowed(host):
+        return None
+    if not _host_resolves_to_public_addresses(host):
+        return None
+    netloc = '[%s]' % host if ':' in host else host
+    if port is not None:
+        netloc = '%s:%d' % (netloc, port)
+    return urlunsplit((parts.scheme.lower(), netloc, parts.path, parts.query, ''))
 
 
 # import re

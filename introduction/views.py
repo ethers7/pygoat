@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from hashlib import md5
 from io import BytesIO
 from random import randint
+from urllib.parse import urljoin
 from xml.dom.pulldom import START_ELEMENT, parseString
 from xml.sax import make_parser
 from xml.sax.handler import feature_external_ges
@@ -36,7 +37,8 @@ from requests.structures import CaseInsensitiveDict
 from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
-from .utility import customHash, filter_blog, safe_lookup_target
+from .utility import (customHash, filter_blog, safe_lookup_target,
+                      safe_outbound_url)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -985,17 +987,37 @@ def ssrf_target(request):
     else:
         return render(request,"Lab/ssrf/ssrf_target.html",{"access_denied":True})
 
+SSRF_LAB_MAX_REDIRECTS = 3
+SSRF_LAB_TIMEOUT = 5
+SSRF_LAB_REJECTED = "URL rejected: only http(s) URLs of allowlisted public hosts can be fetched."
+
+
 @authentication_decorator
 def ssrf_lab2(request):
     if request.method == "GET":
         return render(request, "Lab/ssrf/ssrf_lab2.html")
 
     elif request.method == "POST":
-        url = request.POST["url"]
+        # SSRF guard (CWE-918): only fetch a destination that safe_outbound_url
+        # accepted (http/https, allowlisted host, publicly routable address), and
+        # re-validate every redirect hop, so user input can never make the server
+        # reach loopback, link-local metadata or other internal services.
+        target = safe_outbound_url(request.POST["url"])
+        if target is None:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": SSRF_LAB_REJECTED})
         try:
-            response = requests.get(url)
-            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+            for _ in range(SSRF_LAB_MAX_REDIRECTS + 1):
+                response = requests.get(target, timeout=SSRF_LAB_TIMEOUT, allow_redirects=False)
+                if not response.is_redirect:
+                    return render(
+                        request,
+                        "Lab/ssrf/ssrf_lab2.html",
+                        {"response": response.content.decode(errors="replace")})
+                target = safe_outbound_url(urljoin(target, response.headers.get("location", "")))
+                if target is None:
+                    return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": SSRF_LAB_REJECTED})
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Too many redirects"})
+        except requests.RequestException:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
