@@ -3,7 +3,6 @@ import datetime
 import hashlib
 import json
 import logging
-import os
 import random
 import re
 import string
@@ -33,8 +32,8 @@ from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
 from .utility import (MAX_OUTBOUND_RESPONSE_BYTES, OUTBOUND_FETCH_TIMEOUT,
                       check_lab_password, customHash, filter_blog,
-                      read_bounded_body, safe_eval_arithmetic, safe_lab_text,
-                      safe_lookup_target, safe_outbound_url,
+                      read_bounded_body, read_lab_file, safe_eval_arithmetic,
+                      safe_lab_text, safe_lookup_target, safe_outbound_url,
                       safe_parse_comment_xml, write_lab_file)
 
 #*****************************************Lab Requirements****************************************************#
@@ -951,20 +950,28 @@ def ssrf(request):
     else:
         return redirect('login')
 
+# Shown for every blog the reader refuses: a destination outside the allowlisted
+# blog directory and a name that simply does not exist get the same answer.
+SSRF_LAB_NO_BLOG = "No blog found"
+
+
 def ssrf_lab(request):
     if request.user.is_authenticated:
         if request.method=="GET":
             return render(request,"Lab/ssrf/ssrf_lab.html",{"blog":"Read Blog About SSRF"})
         else:
-            file=request.POST["blog"]
-            try :
-                dirname = os.path.dirname(__file__)
-                filename = os.path.join(dirname, file)
-                file = open(filename,"r")
-                data = file.read()
-                return render(request,"Lab/ssrf/ssrf_lab.html",{"blog":data})
-            except:
-                return render(request, "Lab/ssrf/ssrf_lab.html", {"blog": "No blog found"})
+            # The blog name is request data. It used to be joined onto this
+            # package's directory and opened, which let a caller read any file the
+            # worker could open: "../../etc/passwd" walks out of the tree, and an
+            # absolute name would have replaced the base directory outright
+            # (CWE-22). read_lab_file() confines the read to the allowlisted blog
+            # directory and answers a refused destination exactly like a missing
+            # one, so the lab cannot be used to probe the filesystem.
+            data = read_lab_file(request.POST.get("blog"))
+            if data is None:
+                return render(request, "Lab/ssrf/ssrf_lab.html",
+                              {"blog": SSRF_LAB_NO_BLOG}, status=404)
+            return render(request,"Lab/ssrf/ssrf_lab.html",{"blog":data})
     else:
         return redirect('login')
 

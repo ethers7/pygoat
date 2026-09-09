@@ -447,6 +447,80 @@ def write_lab_file(relative_path, text, max_bytes=_MAX_LAB_FILE_BYTES):
     return destination
 
 
+# The blog reader of the SSRF lab lets a request name the file whose content it
+# wants back. Joining request data onto a directory does not confine that read
+# (CWE-22): a ".." segment walks out of the tree the lab owns, and because
+# os.path.join(base, "/etc/passwd") returns "/etc/passwd", an absolute component
+# discards the base entirely. safe_lab_path() is the read side counterpart of
+# write_lab_file(): it resolves the candidate with os.path.realpath() - which
+# also collapses a symlink that points out of the tree - and requires the result
+# to be a regular file sitting directly in one of the allowlisted directories
+# below, with an allowlisted extension. The legitimate targets of these labs are
+# a small fixed set of files, so the allowlist is the whole contract.
+_LAB_READABLE_DIRS = (
+    os.path.join('templates', 'Lab', 'ssrf', 'blogs'),
+)
+_LAB_READABLE_EXTENSIONS = ('.txt',)
+_MAX_LAB_READ_BYTES = 64 * 1024
+
+
+def safe_lab_path(relative_path, allowed_dirs=_LAB_READABLE_DIRS,
+                  allowed_extensions=_LAB_READABLE_EXTENSIONS):
+    """Return the absolute path of an allowlisted lab file, or None.
+
+    relative_path is untrusted request data. It is resolved against this package
+    directory and the result has to be an existing regular file whose parent
+    directory is exactly one of allowed_dirs and whose extension is on
+    allowed_extensions. ".." segments, absolute paths, nested sub-directories and
+    symlinks that leave the tree all resolve to something outside the allowlist
+    and are therefore rejected; the value is never decoded again here, so a
+    percent encoded payload stays a literal file name that no allowlisted
+    directory contains.
+
+    Callers must treat None as "reject the request", must open the returned path
+    instead of anything derived from the request, and must answer rejected and
+    absent files identically so the response cannot be used to probe the
+    filesystem.
+    """
+    if not isinstance(relative_path, str):
+        return None
+    candidate = relative_path.strip()
+    if not candidate or '\x00' in candidate:
+        return None
+    root = os.path.realpath(_LAB_FILE_ROOT)
+    resolved = os.path.realpath(os.path.join(root, candidate))
+    allowed_parents = {
+        os.path.realpath(os.path.join(root, allowed))
+        for allowed in allowed_dirs
+    }
+    if os.path.dirname(resolved) not in allowed_parents:
+        return None
+    if os.path.splitext(resolved)[1].lower() not in allowed_extensions:
+        return None
+    if not os.path.isfile(resolved):
+        return None
+    return resolved
+
+
+def read_lab_file(relative_path, max_bytes=_MAX_LAB_READ_BYTES, **kwargs):
+    """Return the text of an allowlisted lab file, or None when it is refused.
+
+    The destination is validated by safe_lab_path() and at most max_bytes
+    characters are read, so an oversized file cannot be buffered into a response.
+    A destination outside the allowlist, a missing file and an unreadable file
+    are all reported the same way (None), so the caller cannot leak which paths
+    exist.
+    """
+    path = safe_lab_path(relative_path, **kwargs)
+    if path is None:
+        return None
+    try:
+        with open(path, encoding='utf-8', errors='replace') as handle:
+            return handle.read(max_bytes)
+    except OSError:
+        return None
+
+
 # import re
 def ssrf_code_converter(code):
     list_input = code.split("\n")

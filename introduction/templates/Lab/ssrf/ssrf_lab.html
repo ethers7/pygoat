@@ -50,16 +50,11 @@
 &emsp;&emsp;if request.method=="GET":</br>
 &emsp;&emsp;&emsp;return render(request,"Lab/ssrf/ssrf_lab.html",{"blog":"Read Blog About SSRF"})</br>
 &emsp;&emsp;else:</br>
-&emsp;&emsp;&emsp;file=request.POST["blog"]</br>
-&emsp;&emsp;&emsp;try :</br>
-&emsp;&emsp;&emsp;&emsp;dirname = os.path.dirname(__file__)</br>
-&emsp;&emsp;&emsp;&emsp;filename = os.path.join(dirname, file)</br>
-&emsp;&emsp;&emsp;&emsp;file = open(filename,"r")</br>
-&emsp;&emsp;&emsp;&emsp;data = file.read()</br>
-&emsp;&emsp;&emsp;&emsp;return render(request,"Lab/ssrf/ssrf_lab.html",{"blog":data})</br>
-&emsp;&emsp;&emsp;except:</br>
-&emsp;&emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab.html", {"blog": "No blog found"})</br>
-&emsp;else:</br>    
+&emsp;&emsp;&emsp;data = read_lab_file(request.POST.get("blog"))&emsp;# realpath + blog directory allowlist</br>
+&emsp;&emsp;&emsp;if data is None:</br>
+&emsp;&emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab.html", {"blog": SSRF_LAB_NO_BLOG}, status=404)&emsp;# refused and absent answer alike</br>
+&emsp;&emsp;&emsp;return render(request,"Lab/ssrf/ssrf_lab.html",{"blog":data})</br>
+&emsp;else:</br>
 &emsp;&emsp;return redirect('login')</br>
    </code>
     

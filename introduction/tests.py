@@ -10,9 +10,9 @@ from django.test import SimpleTestCase, TestCase
 
 from .models import authLogin, comments
 from .utility import (MAX_OUTBOUND_RESPONSE_BYTES, read_bounded_body,
-                      safe_eval_arithmetic, safe_lab_source, safe_lab_text,
-                      safe_outbound_url, safe_parse_comment_xml,
-                      write_lab_file)
+                      read_lab_file, safe_eval_arithmetic, safe_lab_path,
+                      safe_lab_source, safe_lab_text, safe_outbound_url,
+                      safe_parse_comment_xml, write_lab_file)
 
 # A publicly routable literal used as an allowlisted destination so the tests
 # never depend on DNS resolution.
@@ -679,3 +679,135 @@ class A6DependencyCheckerTests(SimpleTestCase):
                     mocked_get.return_value = streamed_response(chunks=oversized)
                     with self.assertRaises(ValueError):
                         module.check_vuln(["requests==2.28.0"])
+
+
+BLOGS_READ_RELATIVE_DIR = "templates/Lab/ssrf/blogs"
+_BLOGS_READ_DIR = os.path.join(
+    _INTRODUCTION_DIR, *BLOGS_READ_RELATIVE_DIR.split("/"))
+
+# Destinations the blog reader must never open: parent directory traversal, an
+# absolute path (os.path.join() replaces the base directory with it outright),
+# percent encoded variants of both - the request body is decoded once by Django,
+# so a further decode inside the guard would re-create the traversal - and files
+# that do exist in this project but outside the allowlisted blog directory.
+BLOG_TRAVERSAL_PAYLOADS = (
+    "../../etc/passwd",
+    "../../../../../../etc/passwd",
+    "templates/Lab/ssrf/blogs/../../../../../../etc/passwd",
+    "/etc/passwd",
+    "//etc/passwd",
+    "..%2f..%2fetc%2fpasswd",
+    "%2e%2e/%2e%2e/etc/passwd",
+    "templates/Lab/ssrf/blogs/%2e%2e/secret.txt",
+    "templates/Lab/ssrf/secret.txt",
+    "playground/ssrf/secret.txt",
+    "../manage.py",
+    "../pygoat/settings.py",
+    "../.env",
+    "templates/Lab/ssrf/blogs",
+    "",
+    "   ",
+)
+
+
+class SafeLabFileReadTests(SimpleTestCase):
+    """Regression tests for the lab file read guard (CWE-22).
+
+    The blog reader used to join the request supplied name onto this package's
+    directory and open the result, so "../../etc/passwd" - or any absolute path,
+    which os.path.join() substitutes for the base outright - was read back to the
+    caller. Reads now resolve through safe_lab_path()/read_lab_file(), which
+    confine the result to the allowlisted blog directory.
+    """
+
+    def test_reads_a_blog_from_the_allowlisted_directory(self):
+        blog = os.path.join(_BLOGS_READ_DIR, "blog1.txt")
+        with open(blog, encoding="utf-8") as handle:
+            expected = handle.read()
+        relative = "%s/blog1.txt" % BLOGS_READ_RELATIVE_DIR
+
+        self.assertEqual(safe_lab_path(relative), os.path.realpath(blog))
+        self.assertEqual(read_lab_file(relative), expected)
+
+    def test_rejects_traversal_absolute_and_encoded_destinations(self):
+        for payload in BLOG_TRAVERSAL_PAYLOADS:
+            with self.subTest(payload=payload):
+                self.assertIsNone(safe_lab_path(payload))
+                self.assertIsNone(read_lab_file(payload))
+
+    def test_rejects_non_text_null_byte_and_absent_destinations(self):
+        for payload in (None, 42, b"blog1.txt", ["blog1.txt"],
+                        "%s/blog1.txt\x00" % BLOGS_READ_RELATIVE_DIR,
+                        "%s/does-not-exist.txt" % BLOGS_READ_RELATIVE_DIR):
+            with self.subTest(payload=repr(payload)):
+                self.assertIsNone(safe_lab_path(payload))
+                self.assertIsNone(read_lab_file(payload))
+
+    def test_rejects_an_extension_outside_the_allowlist(self):
+        name = "regression-%s.py" % uuid.uuid4().hex
+        created = os.path.join(_BLOGS_READ_DIR, name)
+        with open(created, "w", encoding="utf-8") as handle:
+            handle.write("SECRET = 1\n")
+        self.addCleanup(os.remove, created)
+        relative = "%s/%s" % (BLOGS_READ_RELATIVE_DIR, name)
+
+        self.assertIsNone(safe_lab_path(relative))
+        self.assertIsNone(read_lab_file(relative))
+
+    def test_rejects_a_symlink_that_escapes_the_blog_directory(self):
+        outside = os.path.join(_PROJECT_DIR, "manage.py")
+        name = "regression-%s.txt" % uuid.uuid4().hex
+        link = os.path.join(_BLOGS_READ_DIR, name)
+        try:
+            os.symlink(outside, link)
+        except (AttributeError, NotImplementedError, OSError) as error:
+            self.skipTest("symlinks are unavailable here: %s" % error)
+        self.addCleanup(os.remove, link)
+        relative = "%s/%s" % (BLOGS_READ_RELATIVE_DIR, name)
+
+        self.assertIsNone(safe_lab_path(relative))
+        self.assertIsNone(read_lab_file(relative))
+
+    def test_read_is_size_bounded(self):
+        relative = "%s/blog1.txt" % BLOGS_READ_RELATIVE_DIR
+
+        self.assertEqual(len(read_lab_file(relative, max_bytes=8)), 8)
+
+
+class SsrfLabBlogReadViewTests(TestCase):
+    """The blog reader lab must serve allowlisted blogs and nothing else."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="blog_read_tester")
+        self.client.force_login(self.user)
+
+    def test_allowlisted_blog_is_still_served(self):
+        with open(os.path.join(_BLOGS_READ_DIR, "blog1.txt"),
+                  encoding="utf-8") as handle:
+            first_line = handle.read().splitlines()[0]
+
+        response = self.client.post(
+            "/ssrf_lab", {"blog": "%s/blog1.txt" % BLOGS_READ_RELATIVE_DIR})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, first_line)
+
+    def test_traversal_payloads_are_refused_without_leaking_file_contents(self):
+        for payload in BLOG_TRAVERSAL_PAYLOADS:
+            with self.subTest(payload=payload):
+                response = self.client.post("/ssrf_lab", {"blog": payload})
+
+                self.assertContains(response, "No blog found", status_code=404)
+                self.assertNotContains(response, "root:", status_code=404)
+                self.assertNotContains(
+                    response, "DJANGO_SETTINGS_MODULE", status_code=404)
+
+    def test_missing_blog_parameter_is_refused_instead_of_erroring(self):
+        response = self.client.post("/ssrf_lab", {})
+
+        self.assertContains(response, "No blog found", status_code=404)
+
+    def test_get_still_renders_the_lab(self):
+        response = self.client.get("/ssrf_lab")
+
+        self.assertEqual(response.status_code, 200)
