@@ -3,7 +3,7 @@ from django.shortcuts import redirect, render
 from django.views.generic import View
 from django.views.decorators.csrf import csrf_exempt
 import subprocess
-from .utility import get_free_port
+from .utility import get_free_port, safe_container_id
 from .models import Challenge, UserChallenge
 # Create your views here.
 
@@ -77,8 +77,14 @@ class DoItFast(View):
 
         user_chal.is_live = False
         user_chal.save()
-        command = f"docker stop {user_chal.container_id}"
-        process = subprocess.Popen(command.split(" "), stdout=subprocess.PIPE)
+        # Only a validated container id/name may reach the docker command.
+        container_id = safe_container_id(user_chal.container_id)
+        if container_id is None:
+            return JsonResponse({'message': 'failed', 'status': '500'})
+
+        # argv list + shell=False: the container id is one argument, never shell syntax.
+        command = ['docker', 'stop', container_id]
+        process = subprocess.Popen(command, shell=False, stdout=subprocess.PIPE)
         output, error = process.communicate()
         return JsonResponse({'message': 'success', 'status': '200'})
     
