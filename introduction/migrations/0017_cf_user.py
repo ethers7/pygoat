@@ -18,10 +18,15 @@ class Migration(migrations.Migration):
                 ('password', models.CharField(max_length=200)),
             ],
         ),
+        # The lab rows are seeded fail-closed: '!' is Django's unusable
+        # password marker, so no crackable credential hash is committed to the
+        # repository. Migration 0022_cf_user_salted_password (and the
+        # seed_lab_users management command) replace it with a salted PBKDF2
+        # hash built from the PYGOAT_CF_LAB_PASSWORD environment variable.
         migrations.RunSQL(
             "INSERT INTO introduction_cf_user (username, password) VALUES "
-            "('alex', '9d6edee6ce9312981084bd98eb3751ee'),"
-            "('admin', 'c93ccd78b2076528346216b3b2f701e6'),"
-            "('rupak', '5ee3547adb4481902349bdd0f2ffba93');"
+            "('alex', '!'),"
+            "('admin', '!'),"
+            "('rupak', '!');"
         ),
     ]

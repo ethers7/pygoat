@@ -1,7 +1,6 @@
 import datetime
 import re
 import subprocess
-from hashlib import md5
 
 import jwt
 from django.conf import settings
@@ -10,7 +9,8 @@ from django.shortcuts import redirect, render
 from django.views.decorators.csrf import csrf_exempt
 
 from .models import CSRF_user_tbl
-from .utility import UnsafeExpressionError, is_safe_host, safe_arithmetic_eval
+from .utility import (UnsafeExpressionError, is_safe_host,
+                      safe_arithmetic_eval, verify_lab_password)
 from .views import authentication_decorator
 
 # import os
@@ -170,9 +170,12 @@ def csrf_lab_login(request):
     elif request.method == 'POST':
         password = request.POST.get('password')
         username = request.POST.get('username')
-        password = md5(password.encode()).hexdigest()
-        User = CSRF_user_tbl.objects.filter(username=username, password=password)
-        if User:
+        # Lab passwords are stored as salted Django password hashes (PBKDF2),
+        # so look the account up by username and verify the submitted password
+        # with the hasher's salt aware, constant-time check instead of matching
+        # an unsalted MD5 digest in the query (CWE-327).
+        User = CSRF_user_tbl.objects.filter(username=username)
+        if User and verify_lab_password(password, User[0].password):
             secret = csrf_lab_jwt_secret()
             if not secret:
                 return HttpResponse(

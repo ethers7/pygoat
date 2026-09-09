@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, redirect, url_for, make_response, flash
-import hashlib
 import json
+import secrets
 from datetime import datetime, timedelta
 import base64
 
@@ -82,8 +82,11 @@ def reset_password():
     # Vulnerable: Password reset token generation
     for username, user_data in users.items():
         if user_data['email'] == email:
-            # Vulnerable: Predictable token generation
-            token = hashlib.md5(f"{email}:{datetime.now()}".encode()).hexdigest()
+            # Reset tokens are unguessable random values from the OS CSPRNG.
+            # The previous MD5 digest of "email:timestamp" was both a broken
+            # hash (CWE-327) and derived from guessable inputs (CWE-330), so a
+            # token could be recomputed offline.
+            token = secrets.token_urlsafe(32)
             password_reset_tokens[token] = username
             
             # In a real application, this would send an email

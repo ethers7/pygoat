@@ -9,6 +9,7 @@ import uuid
 from urllib.parse import urljoin, urlsplit
 
 import requests
+from django.contrib.auth.hashers import check_password, make_password
 
 from .models import *
 
@@ -280,3 +281,32 @@ def filter_blog(code):
 
 def customHash(password):
     return hashlib.sha256(password.encode()).hexdigest()[::-1]
+
+
+def hash_lab_password(raw_password):
+    """Return a salted, iterated hash for a lab credential.
+
+    Delegates to Django's configured password hashers (PBKDF2 by default), so
+    lab credentials are stored the same way as real Django user passwords
+    instead of as an unsalted MD5/SHA digest (CWE-327). ``raw_password=None``
+    produces an unusable password, which lets callers seed a row fail-closed
+    when no credential has been configured.
+    """
+    return make_password(raw_password)
+
+
+def verify_lab_password(raw_password, encoded):
+    """Verify ``raw_password`` against the stored hash ``encoded``.
+
+    The comparison is delegated to the hasher, which is salt aware and does a
+    constant-time digest comparison, so callers never compare hashes with
+    ``==``. Values that are empty, unusable, or not a recognised Django hash
+    (for example a legacy unsalted MD5 digest left in a database) are rejected
+    instead of raising, so verification fails closed.
+    """
+    if not raw_password or not encoded:
+        return False
+    try:
+        return check_password(raw_password, encoded)
+    except ValueError:
+        return False

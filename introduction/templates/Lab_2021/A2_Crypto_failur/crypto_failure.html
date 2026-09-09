@@ -14,14 +14,23 @@
     <button class="coll btn btn-info">Lab 1 Details</button>
     <div class="lab">
         <p class="bp">
-        Can U login as Admin ? 
+        Can U login as Admin ?
         Some hacker previously performed a sql injection attack and managed to get the database dump for user table.
+        This lab used to store the passwords as unsalted MD5 digests (CWE-327), which is why a stolen
+        dump was enough to recover them. Passwords are now stored with a salted, iterated hash
+        (Django's PBKDF2 hashers) and verified with a constant-time check, so a leaked dump no longer
+        gives away the credentials.
 
         <code></br>
-          alex,9d6edee6ce9312981084bd98eb3751ee</br>
-          admin,c93ccd78b2076528346216b3b2f701e6</br>
-          rupak,5ee3547adb4481902349bdd0f2ffba93</br>
+          alex,pbkdf2_sha256$...$&lt;salt&gt;$&lt;hash&gt;</br>
+          admin,pbkdf2_sha256$...$&lt;salt&gt;$&lt;hash&gt;</br>
+          rupak,pbkdf2_sha256$...$&lt;salt&gt;$&lt;hash&gt;</br>
         </code>
+
+        The lab accounts get their password at deploy time from the
+        <code>PYGOAT_CF_LAB_PASSWORD</code> environment variable
+        (<code>python manage.py seed_lab_users</code>). No credential is kept in the repository, and
+        without that variable the accounts have no usable password.
 
         <br>
         <div align="right"> <button class="btn btn-info" type="button" onclick="window.location.href='/cryptographic_failure/lab'">Access

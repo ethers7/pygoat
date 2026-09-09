@@ -10,7 +10,6 @@ import string
 import subprocess
 import uuid
 from dataclasses import dataclass
-from hashlib import md5
 from io import BytesIO
 from random import randint
 
@@ -37,7 +36,7 @@ from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
 from .utility import (UnsafeExpressionError, UnsafeUrlError, customHash,
                       fetch_url_safely, filter_blog, is_safe_host,
-                      safe_arithmetic_eval)
+                      safe_arithmetic_eval, verify_lab_password)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -1070,8 +1069,14 @@ def crypto_failure_lab(request):
             username = request.POST["username"]
             password = request.POST["password"]
             try:
-                password = md5(password.encode()).hexdigest()
-                user = CF_user.objects.filter(username=username,password=password).first()
+                # Lab credentials are stored as salted Django password hashes
+                # (PBKDF2), so the row is looked up by username and the
+                # submitted password is checked with the hasher's salt aware,
+                # constant-time verification instead of matching an unsalted
+                # MD5 digest inside the query (CWE-327).
+                user = CF_user.objects.filter(username=username).first()
+                if user is not None and not verify_lab_password(password, user.password):
+                    user = None
                 return render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab.html",{"user":user, "success":True,"failure":False})
             except Exception as e:
                 return render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab.html",{"success":False, "failure":True})

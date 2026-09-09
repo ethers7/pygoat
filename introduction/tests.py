@@ -1,9 +1,12 @@
+from django.contrib.auth.hashers import is_password_usable
+from django.contrib.auth.models import User
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
-from .models import comments
+from .models import CF_user, CSRF_user_tbl, comments
 from .utility import (UnsafeExpressionError, UnsafeUrlError,
-                      safe_arithmetic_eval, validate_public_url)
+                      hash_lab_password, safe_arithmetic_eval,
+                      validate_public_url, verify_lab_password)
 
 # Create your tests here.
 
@@ -152,3 +155,109 @@ class XxeParseTests(TestCase):
         response = self.post_xml("<?xml version='1.0'?><comm><text>hello lab</text></comm>")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(comments.objects.get(id=1).comment, "hello lab")
+
+
+class LabPasswordHashTests(SimpleTestCase):
+    """Unit tests for the lab password hashing helpers (CWE-327).
+
+    Lab logins used to hash the submitted password with unsalted MD5 and match
+    that digest inside the query; they now store salted hashes and verify them
+    with the hasher's constant-time check.
+    """
+
+    PASSWORD = "L4b-P@ssw0rd!"
+    # Shape of a legacy stored value: an unsalted 32 hex char digest.
+    LEGACY_DIGEST = "0" * 32
+
+    def test_hash_is_salted_and_not_a_bare_digest(self):
+        first = hash_lab_password(self.PASSWORD)
+        second = hash_lab_password(self.PASSWORD)
+        self.assertNotEqual(first, second)  # random per-password salt
+        self.assertIn("$", first)
+        self.assertNotEqual(len(first), len(self.LEGACY_DIGEST))
+        self.assertTrue(is_password_usable(first))
+
+    def test_verify_accepts_correct_password(self):
+        self.assertTrue(verify_lab_password(self.PASSWORD,
+                                            hash_lab_password(self.PASSWORD)))
+
+    def test_verify_rejects_wrong_password(self):
+        self.assertFalse(verify_lab_password("not-the-password",
+                                             hash_lab_password(self.PASSWORD)))
+
+    def test_verify_rejects_legacy_unsalted_digest(self):
+        self.assertFalse(verify_lab_password(self.PASSWORD, self.LEGACY_DIGEST))
+
+    def test_verify_rejects_unusable_and_missing_values(self):
+        self.assertFalse(verify_lab_password(self.PASSWORD, hash_lab_password(None)))
+        for raw, encoded in ((None, hash_lab_password(self.PASSWORD)),
+                             ("", hash_lab_password(self.PASSWORD)),
+                             (self.PASSWORD, None),
+                             (self.PASSWORD, "")):
+            self.assertFalse(verify_lab_password(raw, encoded))
+
+
+# DEBUG=False + django-heroku's manifest static storage makes {% static %} fail
+# without collectstatic, so mirror tests_platform.py and force plain storage.
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+)
+class LabLoginHashingTests(TestCase):
+    """End to end tests for the lab logins that used to compare MD5 digests."""
+
+    LAB_PASSWORD = "L4b-P@ssw0rd!"
+    SEEDED_USERNAMES = ("alex", "admin", "rupak")
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="labgate",
+                                             password="Str0ng-Passw0rd!")
+        self.client.force_login(self.user)
+
+    def test_seeded_crypto_lab_rows_have_no_usable_password(self):
+        """Migrations must not ship a crackable credential for the lab."""
+        rows = CF_user.objects.filter(username__in=self.SEEDED_USERNAMES)
+        self.assertTrue(rows.exists())
+        for row in rows:
+            self.assertFalse(is_password_usable(row.password), msg=row.username)
+            self.assertFalse(verify_lab_password("admin", row.password))
+
+    def test_crypto_lab_login_accepts_configured_password(self):
+        CF_user.objects.filter(username="alex").update(
+            password=hash_lab_password(self.LAB_PASSWORD))
+        response = self.client.post(reverse("cryptographic_failure_lab"),
+                                    {"username": "alex", "password": self.LAB_PASSWORD})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Successfully logged in as alex")
+
+    def test_crypto_lab_login_rejects_wrong_password(self):
+        CF_user.objects.filter(username="alex").update(
+            password=hash_lab_password(self.LAB_PASSWORD))
+        response = self.client.post(reverse("cryptographic_failure_lab"),
+                                    {"username": "alex", "password": "wrong-password"})
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Successfully logged in as alex")
+
+    @override_settings(CSRF_LAB_JWT_SECRET="unit-test-signing-key")
+    def test_csrf_lab_login_accepts_configured_password(self):
+        CSRF_user_tbl.objects.create(username="susUser2878",
+                                     password=hash_lab_password(self.LAB_PASSWORD),
+                                     balance=1000)
+        response = self.client.post(reverse("csrf_lab_login"),
+                                    {"username": "susUser2878",
+                                     "password": self.LAB_PASSWORD})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], "/mitre/9/lab/transaction")
+        self.assertIn("auth_cookiee", response.cookies)
+
+    @override_settings(CSRF_LAB_JWT_SECRET="unit-test-signing-key")
+    def test_csrf_lab_login_rejects_wrong_password(self):
+        CSRF_user_tbl.objects.create(username="susUser2878",
+                                     password=hash_lab_password(self.LAB_PASSWORD),
+                                     balance=1000)
+        response = self.client.post(reverse("csrf_lab_login"),
+                                    {"username": "susUser2878",
+                                     "password": "wrong-password"})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], "/mitre/9/lab/login")
+        self.assertNotIn("auth_cookiee", response.cookies)

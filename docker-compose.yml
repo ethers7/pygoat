@@ -9,10 +9,17 @@ services:
     environment:
       # Passed through from the host environment; no value is stored in the repo.
       - CSRF_LAB_JWT_SECRET
+      # Lab account passwords are hashed with Django's salted hashers at migrate
+      # time; unset means the lab accounts have no usable password.
+      - PYGOAT_CF_LAB_PASSWORD
+      - PYGOAT_CSRF_LAB_PASSWORD
     depends_on:
       - migration
   migration:
     image: pygoat/pygoat:latest
     command: python manage.py migrate --noinput
+    environment:
+      - PYGOAT_CF_LAB_PASSWORD
+      - PYGOAT_CSRF_LAB_PASSWORD
     volumes:
       - .:/app
