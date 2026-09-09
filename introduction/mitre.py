@@ -4,6 +4,7 @@ import subprocess
 from hashlib import md5
 
 import jwt
+from django.conf import settings
 from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
 from django.views.decorators.csrf import csrf_exempt
@@ -152,6 +153,16 @@ def mitre_top25(request):
     if request.method == 'GET':
         return render(request, 'mitre/mitre_top25.html')
 
+def csrf_lab_jwt_secret():
+    """Return the CSRF lab JWT signing key, or None when it is not configured.
+
+    The key comes from settings.CSRF_LAB_JWT_SECRET, which is sourced from the
+    CSRF_LAB_JWT_SECRET environment variable. No signing key is stored in the
+    repository, so callers must handle a missing value by failing closed.
+    """
+    return getattr(settings, 'CSRF_LAB_JWT_SECRET', None) or None
+
+
 @authentication_decorator
 def csrf_lab_login(request):
     if request.method == 'GET':
@@ -162,12 +173,17 @@ def csrf_lab_login(request):
         password = md5(password.encode()).hexdigest()
         User = CSRF_user_tbl.objects.filter(username=username, password=password)
         if User:
+            secret = csrf_lab_jwt_secret()
+            if not secret:
+                return HttpResponse(
+                    'CSRF lab is not configured: set the CSRF_LAB_JWT_SECRET '
+                    'environment variable to enable this lab.', status=503)
             payload ={
                 'username': username,
                 'exp': datetime.datetime.utcnow() + datetime.timedelta(seconds=300),
                 'iat': datetime.datetime.utcnow()
             }
-            cookie = jwt.encode(payload, 'csrf_vulneribility', algorithm='HS256')
+            cookie = jwt.encode(payload, secret, algorithm='HS256')
             response = redirect("/mitre/9/lab/transaction")
             response.set_cookie('auth_cookiee', cookie)
             return response
@@ -180,7 +196,10 @@ def csrf_transfer_monei(request):
     if request.method == 'GET':
         try:
             cookie = request.COOKIES['auth_cookiee']
-            payload = jwt.decode(cookie, 'csrf_vulneribility', algorithms=['HS256'])
+            secret = csrf_lab_jwt_secret()
+            if not secret:
+                return redirect('/mitre/9/lab/login')
+            payload = jwt.decode(cookie, secret, algorithms=['HS256'])
             username = payload['username']
             User = CSRF_user_tbl.objects.filter(username=username)
             if not User:
@@ -192,7 +211,10 @@ def csrf_transfer_monei(request):
 def csrf_transfer_monei_api(request,recipent,amount):
     if request.method == "GET":
         cookie = request.COOKIES['auth_cookiee']
-        payload = jwt.decode(cookie, 'csrf_vulneribility', algorithms=['HS256'])
+        secret = csrf_lab_jwt_secret()
+        if not secret:
+            return redirect('/mitre/9/lab/login')
+        payload = jwt.decode(cookie, secret, algorithms=['HS256'])
         username = payload['username']
         User = CSRF_user_tbl.objects.filter(username=username)
         if not User:
