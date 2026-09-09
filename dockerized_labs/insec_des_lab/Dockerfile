@@ -23,4 +23,11 @@ EXPOSE 8080
 
 USER appuser
 
-CMD ["flask", "run", "--debug", "--port=8080"]
+# CWE-489: `--debug` turned on the Werkzeug debugger in the shipped image, and
+# that debugger hands out an interactive Python console on any unhandled
+# exception, so the published port was remote code execution. Debug mode is now
+# opt-in through the environment only: `flask run` reads FLASK_DEBUG itself, so
+# FLASK_DEBUG=1 restores it for local debugging and it is off by default. The
+# reloader is still asked for explicitly so the bind-mounted /app (see
+# docker-compose.yml) keeps picking up edits, which does not expose a console.
+CMD ["flask", "run", "--reload", "--port=8080"]
