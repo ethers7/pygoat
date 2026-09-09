@@ -42,7 +42,11 @@ event3 = function(){
         document.getElementById("a9_d3").style.display = 'flex';
         for (var i = 0; i < data.logs.length; i++) {
             var li = document.createElement("li");
-            li.innerHTML = data.logs[i];
+            // The log lines come from test.log, whose content is produced by the
+            // code submitted to this lab, so they are untrusted text. They are
+            // plain log records with no markup to render: assign them as text so
+            // a crafted line cannot become HTML/script in this page (CWE-79).
+            li.textContent = data.logs[i];
             document.getElementById("a9_d3").appendChild(li);
         }
     })
