@@ -4,17 +4,19 @@ A vulnerable web application demonstrating insecure deserialization vulnerabilit
 
 ## Description
 
-This lab demonstrates the dangers of insecure deserialization by implementing a vulnerable user session mechanism that uses Python's pickle module. The application allows users to:
+This lab demonstrates the dangers of insecure deserialization by walking through a user session mechanism that round-trips state through a client-supplied token. The application allows users to:
 
 1. Create a regular user account
 2. Receive a serialized token
 3. Submit the token for deserialization
-4. Exploit the vulnerability to gain admin access
+4. Attempt to tamper with the token to gain admin access
+
+The deserialization step is now hardened (see [Remediation](#remediation)): the token is signed JSON instead of a pickle payload, so tampering is detected and rejected instead of being executed.
 
 ## Features
 
-- Vulnerable pickle deserialization
-- Base64 encoded serialized data
+- Signed JSON tokens (`itsdangerous.URLSafeSerializer`, bundled with Flask)
+- Strict type checks on the decoded payload
 - User role system (regular user vs admin)
 - Docker containerization
 - Light/Dark theme support
@@ -72,13 +74,13 @@ insec_des_lab/
 
 ## Vulnerability Details
 
-The lab uses Python's pickle module for serialization/deserialization of user data. The vulnerability exists because:
+The original version of this lab used Python's `pickle` module for serialization/deserialization of user data. The vulnerability existed because:
 
-1. The application trusts user-provided serialized data
-2. Uses pickle.loads() without validation
-3. The User class has a vulnerable __reduce__ method
+1. The application trusted user-provided serialized data
+2. It called `pickle.loads()` without any integrity check or validation
+3. The `User` class exposed a `__reduce__` method, turning deserialization into arbitrary code execution
 
-## Exploitation Steps
+## Exploitation Steps (against the vulnerable version)
 
 1. Create a regular user account
 2. Intercept the serialized token
@@ -86,6 +88,17 @@ The lab uses Python's pickle module for serialization/deserialization of user da
 4. Modify the serialized data to set is_admin=True
 5. Re-encode the modified data
 6. Submit the modified token to gain admin access
+
+## Remediation
+
+The lab feature is unchanged &mdash; `/serialize` still issues a token and `/deserialize` still restores the user from it &mdash; but both sides now use a safe format:
+
+- `/serialize` returns `URLSafeSerializer.dumps()` output: a URL-safe JSON payload plus a signature.
+- `/deserialize` calls `URLSafeSerializer.loads()`, which verifies the signature before the payload is parsed, then rebuilds `User` from validated JSON primitives (`str` username, `bool` is_admin). There is no pickle fallback.
+- The `__reduce__` gadget was removed from `User`.
+- The signing key is read from the `LAB_SECRET_KEY` environment variable; when unset, a random per-process key is generated (no secret is committed).
+
+Tampering with the payload now yields a signature error, which is exactly the behaviour the lab is meant to teach.
 
 ## Mitigation Strategies
 
