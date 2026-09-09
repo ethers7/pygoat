@@ -7,6 +7,19 @@ import base64
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'  # Vulnerable: Hardcoded secret key
 
+# Cookie hardening (CWE-614 / CWE-1004 / CWE-1275). Every cookie this app
+# issues carries:
+#   secure=True     -> never transmitted over plaintext HTTP
+#   httponly=True   -> not readable from document.cookie (XSS cannot steal it)
+#   samesite='Lax'  -> not attached to cross-site requests (CSRF hardening)
+# The lab is reached at http://localhost:5000 and browsers treat localhost as a
+# trustworthy origin, so Secure cookies keep working without terminating TLS.
+# The same attributes are applied to the framework session cookie used by
+# flash() through the SESSION_COOKIE_* config below.
+app.config['SESSION_COOKIE_SECURE'] = True
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+
 # Vulnerable: Storing user data in memory
 users = {
     'admin': {
@@ -46,10 +59,20 @@ def login():
         
         if remember_me:
             # Vulnerable: Insecure "Remember Me" implementation
-            response.set_cookie('session', session_token, max_age=30*24*60*60)
+            # Long-lived cookie (30 days), still Secure/HttpOnly/SameSite=Lax.
+            response.set_cookie('session', session_token,
+                                max_age=30*24*60*60,
+                                secure=True,
+                                httponly=True,
+                                samesite='Lax')
         else:
-            response.set_cookie('session', session_token)
-            
+            # Browser-session cookie: no max_age, so it dies with the browser.
+            response.set_cookie('session', session_token,
+                                secure=True,
+                                httponly=True,
+                                samesite='Lax')
+
+
         return response
     
     flash('Invalid username or password')
@@ -121,6 +144,17 @@ def dashboard():
         pass
     
     return redirect(url_for('lab'))
+
+@app.route('/logout', methods=['POST'])
+def logout():
+    # The session cookie is HttpOnly, so JavaScript can no longer clear it.
+    # Expire it server-side with the same attributes it was issued with.
+    response = make_response(redirect(url_for('lab')))
+    response.delete_cookie('session',
+                           secure=True,
+                           httponly=True,
+                           samesite='Lax')
+    return response
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)  # Vulnerable: Debug mode enabled in production 

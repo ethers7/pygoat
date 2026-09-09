@@ -27,6 +27,9 @@ This is a deliberately vulnerable web application that demonstrates common authe
    docker-compose up --build
    ```
 4. Access the lab at http://localhost:5000
+   (browsers treat `localhost` as a trustworthy origin, so the `Secure` session
+   cookie works over plain HTTP on this address; reach the lab through
+   `localhost`, not a LAN IP)
 
 ### Default Credentials
 
@@ -51,6 +54,11 @@ The lab comes with two pre-configured users:
    - Login with remember me enabled
    - Analyze the session cookie structure
    - Try to manipulate the session token
+   - Note: the `session` cookie is issued with `Secure`, `HttpOnly` and
+     `SameSite=Lax`, so it is not readable from `document.cookie`. Inspect it in
+     your browser devtools (Application > Cookies) and use the Logout button,
+     which clears the cookie server-side. The token itself is still an
+     unauthenticated base64 blob, so the exercise is unchanged.
 
 3. **Password Reset Exploitation**
    - Request a password reset

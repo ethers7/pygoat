@@ -29,7 +29,9 @@
             <div class="lab">
                 <p class="bp">
                     <b>Challenge:</b> Can you find a way to escalate your privileges to admin?<br>
-                    <b>Hint:</b> Examine your session cookie and its structure.
+                    <b>Hint:</b> Examine your session cookie and its structure. It is
+                    HttpOnly, so inspect it in your browser devtools
+                    (Application &gt; Cookies) instead of <code>document.cookie</code>.
                 </p>
             </div>
             {% endif %}
@@ -49,7 +51,9 @@
         </div>
 
         <div style="text-align: right; margin-top: 20px;">
-            <button type="button" onclick="logout()">Logout</button>
+            <form action="{{ url_for('logout') }}" method="post" style="display: inline;">
+                <button type="submit">Logout</button>
+            </form>
         </div>
     </div>
 </div>
@@ -72,12 +76,4 @@
     margin: 0 5px;
 }
 </style>
-
-<script>
-function logout() {
-    // Clear the session cookie and redirect to login
-    document.cookie = "session=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-    window.location.href = "/lab";
-}
-</script>
 {% endblock %} 
