@@ -319,6 +319,99 @@ def safe_eval_arithmetic(expression):
         raise ValueError('the expression is nested too deeply')
 
 
+# Several labs let a request supply the contents of a file the application then
+# writes to disk (the A6/A9 code editors, the SSTI blog editor). Writing request
+# data straight to an outside resource lets a caller forge extra lines or records
+# with CR/LF sequences (CWE-93), smuggle NUL/escape sequences into the file and -
+# when the name is attacker influenced - land outside the directory the lab owns
+# (CWE-73). safe_lab_text()/safe_lab_source() neutralise the payload and
+# write_lab_file() confines the destination to an allowlist of lab directories,
+# and every one of those writes goes through them.
+_LAB_FILE_ROOT = os.path.dirname(os.path.abspath(__file__))
+_MAX_LAB_FILE_BYTES = 64 * 1024
+# The only directories a lab may (over)write, relative to this package.
+_LAB_WRITABLE_DIRS = (
+    os.path.join('playground', 'A6'),
+    os.path.join('playground', 'A9'),
+    os.path.join('playground', 'ssrf'),
+    os.path.join('templates', 'Lab_2021', 'A3_Injection', 'Blogs'),
+)
+# Every C0/C1 control character except the tab and the newline that a source file
+# or an HTML template legitimately contains.
+_CONTROL_CHARACTERS_RE = re.compile(r'[\x00-\x08\x0b-\x1f\x7f-\x9f]')
+
+
+def safe_lab_text(value, max_bytes=_MAX_LAB_FILE_BYTES):
+    """Return request supplied text that is safe to write to a lab file.
+
+    CRLF and bare CR line endings are folded to a single LF, so a value cannot
+    forge a record boundary in the file it is written to, every remaining control
+    character (NUL, ESC, backspace, C1) is dropped, and the payload is size
+    bounded.
+
+    Raises ValueError when the value is missing, is not text or is larger than
+    max_bytes. Callers must treat ValueError as "reject the request" and must
+    write the returned value instead of the raw request data.
+    """
+    if value is None:
+        raise ValueError('no content was submitted')
+    if not isinstance(value, str):
+        raise ValueError('the content must be text')
+    if len(value.encode('utf-8', 'replace')) > max_bytes:
+        raise ValueError('the content is larger than %d bytes' % max_bytes)
+    text = value.replace('\r\n', '\n').replace('\r', '\n')
+    return _CONTROL_CHARACTERS_RE.sub('', text)
+
+
+def safe_lab_source(value, max_bytes=_MAX_LAB_FILE_BYTES):
+    """Return request supplied Python source that is safe to write to a lab file.
+
+    The text is neutralised by safe_lab_text() and then has to parse as Python.
+    It is only parsed, never evaluated or imported here, which keeps a request
+    from replacing an importable lab module with something that is not even valid
+    source.
+
+    Raises ValueError when the code is missing, oversized or unparseable;
+    callers must treat that as "reject the request".
+    """
+    text = safe_lab_text(value, max_bytes=max_bytes)
+    try:
+        ast.parse(text)
+    except (SyntaxError, ValueError, MemoryError, RecursionError):
+        raise ValueError('the submitted code is not valid Python source')
+    return text
+
+
+def write_lab_file(relative_path, text, max_bytes=_MAX_LAB_FILE_BYTES):
+    """Write text to relative_path inside one of the allowlisted lab directories.
+
+    relative_path is resolved against this package directory and its parent
+    directory has to be on the _LAB_WRITABLE_DIRS allowlist, so neither a ".."
+    segment nor an absolute path can make a lab write outside the tree it owns.
+    The content is passed through safe_lab_text() again (the operation is
+    idempotent) so the write itself can never receive un-neutralised request
+    data, and the file is written as UTF-8 with LF line endings.
+
+    Raises ValueError when the destination is not allowlisted or the content is
+    rejected, and OSError when the write fails.
+    """
+    if not isinstance(relative_path, str) or not relative_path.strip():
+        raise ValueError('the destination is missing')
+    text = safe_lab_text(text, max_bytes=max_bytes)
+    root = os.path.realpath(_LAB_FILE_ROOT)
+    destination = os.path.realpath(os.path.join(root, relative_path))
+    parent = os.path.dirname(destination)
+    allowed_parents = {
+        os.path.realpath(os.path.join(root, allowed))
+        for allowed in _LAB_WRITABLE_DIRS
+    }
+    if parent not in allowed_parents or not os.path.basename(destination):
+        raise ValueError('the destination is not a writable lab file')
+    with open(destination, 'w', encoding='utf-8', newline='\n') as handle:
+        handle.write(text)
+    return destination
+
+
 # import re
 def ssrf_code_converter(code):
     list_input = code.split("\n")

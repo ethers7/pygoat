@@ -59,17 +59,23 @@ def ssrf_code_checker(request):
 def log_function_checker(request):
     if request.method == 'POST':
         csrf_token = request.POST.get("csrfmiddlewaretoken")
-        log_code = request.POST.get('log_code')
-        api_code = request.POST.get('api_code')
-        dirname = os.path.dirname(__file__)
-        log_filename = os.path.join(dirname, "playground/A9/main.py")
-        api_filename = os.path.join(dirname, "playground/A9/api.py")
-        f = open(log_filename,"w")
-        f.write(log_code)
-        f.close()
-        f = open(api_filename,"w")
-        f.write(api_code)
-        f.close()
+        # The submitted code is request data that ends up in files on disk, so it
+        # is neutralised and validated before the write (CWE-93): safe_lab_source()
+        # folds CR/CRLF to LF, drops the remaining control characters, bounds the
+        # size and requires parseable Python, and write_lab_file() confines the
+        # destination to the lab's own playground directory. The raw request value
+        # is never written.
+        try:
+            log_code = safe_lab_source(request.POST.get('log_code'))
+            api_code = safe_lab_source(request.POST.get('api_code'))
+            write_lab_file("playground/A9/main.py", log_code)
+            write_lab_file("playground/A9/api.py", api_code)
+        except ValueError as rejected:
+            return JsonResponse(
+                {"message": "invalid code: %s" % rejected, "logs": []}, status = 400)
+        except OSError:
+            return JsonResponse(
+                {"message": "could not save the code", "logs": []}, status = 400)
         # Clearing the log file before starting the test
         f = open('test.log', 'w')
         f.write("")
@@ -130,13 +136,14 @@ def A6_disscussion_api(request):
 def A6_disscussion_api_2(request):
     if request.method != 'POST':
         return JsonResponse({"message":"method not allowed"},status = 405)
+    # Same guards as the A9 checker: the request supplied code is neutralised and
+    # parsed before it replaces the lab module, and write_lab_file() keeps the
+    # destination inside the allowlisted playground directory (CWE-93).
     try:
-        code = request.POST.get('code')
-        dirname = os.path.dirname(__file__)
-        filename = os.path.join(dirname, "playground/A6/utility.py")
-        f = open(filename,"w")
-        f.write(code)
-        f.close()
-    except:
-        return JsonResponse({"message":"missing code"},status = 400)
+        code = safe_lab_source(request.POST.get('code'))
+        write_lab_file("playground/A6/utility.py", code)
+    except ValueError as rejected:
+        return JsonResponse({"message":"invalid code: %s" % rejected},status = 400)
+    except OSError:
+        return JsonResponse({"message":"could not save the code"},status = 400)
     return JsonResponse({"message":"success"},status = 200)

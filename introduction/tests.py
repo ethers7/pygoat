@@ -1,13 +1,15 @@
 import os
 import re
+import uuid
 from unittest import mock
 
 from django.contrib.auth.models import User
 from django.test import SimpleTestCase, TestCase
 
 from .models import authLogin, comments
-from .utility import (safe_eval_arithmetic, safe_outbound_url,
-                      safe_parse_comment_xml)
+from .utility import (safe_eval_arithmetic, safe_lab_source, safe_lab_text,
+                      safe_outbound_url, safe_parse_comment_xml,
+                      write_lab_file)
 
 # A publicly routable literal used as an allowlisted destination so the tests
 # never depend on DNS resolution.
@@ -455,3 +457,133 @@ class TemplateCsrfTokenTests(SimpleTestCase):
                 '<form method="post">{% csrf_token %}<input></form>'), [])
         # A GET form needs no token.
         self.assertEqual(post_forms_without_csrf_token('<form method="get"></form>'), [])
+
+
+BLOGS_RELATIVE_DIR = "templates/Lab_2021/A3_Injection/Blogs"
+
+
+class SafeLabFileWriteTests(SimpleTestCase):
+    """Regression tests for the lab file write guards (CWE-93 / CWE-73).
+
+    Request data used to be written to disk verbatim, so a value could carry CR
+    line endings (forging records in the file it lands in) or NUL/escape
+    sequences. Every lab write now goes through these helpers.
+    """
+
+    def test_folds_cr_and_crlf_line_endings(self):
+        self.assertEqual(
+            safe_lab_text("first\r\nsecond\rthird\n"), "first\nsecond\nthird\n")
+
+    def test_drops_other_control_characters(self):
+        self.assertEqual(safe_lab_text("audit\x00log\x07entry\x1b"), "auditlogentry")
+
+    def test_keeps_tabs_newlines_and_non_ascii_text(self):
+        self.assertEqual(safe_lab_text("\tprint('héllo')\n"),
+                         "\tprint('héllo')\n")
+
+    def test_rejects_missing_non_text_and_oversized_content(self):
+        for value in (None, b"bytes are not text", 42):
+            with self.subTest(value=repr(value)):
+                with self.assertRaises(ValueError):
+                    safe_lab_text(value)
+        with self.assertRaises(ValueError):
+            safe_lab_text("x" * 10, max_bytes=9)
+
+    def test_source_guard_accepts_python_and_rejects_everything_else(self):
+        self.assertEqual(
+            safe_lab_source("def f():\r\n    return 1\r\n"), "def f():\n    return 1\n")
+        for payload in ("def broken(: ???", "}{", "class:", "return 1\r\n  return 2"):
+            with self.subTest(payload=repr(payload)):
+                with self.assertRaises(ValueError):
+                    safe_lab_source(payload)
+
+    def test_write_rejects_destinations_outside_the_allowlisted_directories(self):
+        for destination in (
+                "",
+                "manage.py",
+                "../../evil.py",
+                "playground/A9/../../../evil.py",
+                "playground/A9/nested/evil.py",
+                "/tmp/evil.py"):
+            with self.subTest(destination=destination):
+                with self.assertRaises(ValueError):
+                    write_lab_file(destination, "x = 1\n")
+
+    def test_write_neutralises_content_inside_an_allowlisted_directory(self):
+        relative = "%s/regression-%s.html" % (BLOGS_RELATIVE_DIR, uuid.uuid4().hex)
+
+        written = write_lab_file(relative, "line\r\nnext\x00\r")
+
+        self.addCleanup(os.remove, written)
+        with open(written, encoding="utf-8", newline="") as handle:
+            self.assertEqual(handle.read(), "line\nnext\n")
+
+
+class LabFileWriteViewTests(TestCase):
+    """The lab writers must neutralise request data instead of writing it raw."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="lab_write_tester")
+        self.client.force_login(self.user)
+
+    def test_ssti_blog_is_written_without_control_characters(self):
+        response = self.client.post("/ssti/lab", {"blog": "hello\r\nworld\x00!"})
+
+        self.assertEqual(response.status_code, 302)
+        blog_id = response["Location"].rsplit("/", 1)[-1]
+        written = os.path.join(
+            _INTRODUCTION_DIR, *BLOGS_RELATIVE_DIR.split("/"), "%s.html" % blog_id)
+        self.addCleanup(os.remove, written)
+        with open(written, encoding="utf-8", newline="") as handle:
+            body = handle.read()
+
+        self.assertNotIn("\r", body)
+        self.assertNotIn("\x00", body)
+        self.assertIn("hello\nworld!", body)
+
+    def test_oversized_blog_is_rejected_without_writing_a_file(self):
+        blogs_dir = os.path.join(_INTRODUCTION_DIR, *BLOGS_RELATIVE_DIR.split("/"))
+        before = set(os.listdir(blogs_dir))
+
+        response = self.client.post("/ssti/lab", {"blog": "A" * (64 * 1024 + 1)})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Blog rejected")
+        self.assertEqual(set(os.listdir(blogs_dir)), before)
+
+    def test_a9_log_checker_rejects_unparseable_code_and_keeps_the_module(self):
+        module = os.path.join(_INTRODUCTION_DIR, "playground", "A9", "main.py")
+        with open(module, encoding="utf-8") as handle:
+            before = handle.read()
+
+        response = self.client.post(
+            "/2021/discussion/A9/api",
+            {"log_code": "def broken(: ???", "api_code": "def f():\n    pass\n"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("invalid code", response.json()["message"])
+        with open(module, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), before)
+
+    def test_a6_api_rejects_unparseable_code_and_keeps_the_module(self):
+        module = os.path.join(_INTRODUCTION_DIR, "playground", "A6", "utility.py")
+        with open(module, encoding="utf-8") as handle:
+            before = handle.read()
+
+        response = self.client.post("/2021/discussion/A6/api2", {"code": "import ???"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("invalid code", response.json()["message"])
+        with open(module, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), before)
+
+    def test_a6_api_still_saves_valid_code_neutralised_at_the_fixed_lab_path(self):
+        submitted = "def check_vuln(packages):\r\n    return []\r\n"
+
+        with mock.patch("introduction.apis.write_lab_file") as mocked_write:
+            response = self.client.post("/2021/discussion/A6/api2", {"code": submitted})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["message"], "success")
+        mocked_write.assert_called_once_with(
+            "playground/A6/utility.py", "def check_vuln(packages):\n    return []\n")

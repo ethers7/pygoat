@@ -17,6 +17,9 @@
     </div>
     <div id="ssti-inner-div2">
         <h3>Add Blog</h3>
+        {% if error %}
+        <p class="ssti-error" style="color: #e74c3c;">Blog rejected: {{ error }}</p>
+        {% endif %}
         <form method="POST" class="ssti-form">
             {% csrf_token %} 
             <textarea id="ssti_blog" name="blog" placeholder="your blogs goes here" style="background:#f4f4f924;overflow: auto"></textarea>

@@ -32,8 +32,9 @@ from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
 from .utility import (check_lab_password, customHash, filter_blog,
-                      safe_eval_arithmetic, safe_lookup_target,
-                      safe_outbound_url, safe_parse_comment_xml)
+                      safe_eval_arithmetic, safe_lab_text, safe_lookup_target,
+                      safe_outbound_url, safe_parse_comment_xml,
+                      write_lab_file)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -1032,7 +1033,21 @@ def ssti_lab(request):
             users_blogs = Blogs.objects.filter(author=request.user)
             return render(request,"Lab_2021/A3_Injection/ssti_lab.html", {"blogs":users_blogs})
         elif request.method=="POST":
-            blog = request.POST["blog"]
+            # The blog body is request data written to a file on disk, so it is
+            # neutralised before the write (CWE-93): safe_lab_text() folds CR/CRLF
+            # to LF, drops the remaining control characters and bounds the size,
+            # and write_lab_file() confines the destination to the lab's own Blogs
+            # directory. The raw request value is never written.
+            try:
+                blog = safe_lab_text(request.POST["blog"])
+            except ValueError as rejected:
+                return render(
+                    request,
+                    "Lab_2021/A3_Injection/ssti_lab.html",
+                    {
+                        "blogs": Blogs.objects.filter(author=request.user),
+                        "error": str(rejected)
+                    })
             id = str(uuid.uuid4()).split('-')[-1]
 
             blog = filter_blog(blog)
@@ -1043,12 +1058,8 @@ def ssti_lab(request):
             
             blog = prepend_code + blog + "{% endblock %}"
             new_blog = Blogs.objects.create(author = request.user, blog_id = id)
-            new_blog.save() 
-            dirname = os.path.dirname(__file__)
-            filename = os.path.join(dirname, f"templates/Lab_2021/A3_Injection/Blogs/{id}.html")
-            file = open(filename, "w+") 
-            file.write(blog)
-            file.close()
+            new_blog.save()
+            write_lab_file(f"templates/Lab_2021/A3_Injection/Blogs/{id}.html", blog)
             return redirect(f'blog/{id}')
     else:
         return redirect('login')
