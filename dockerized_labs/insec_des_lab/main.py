@@ -120,4 +120,12 @@ def deserialize_data():
     return render_template('result.html', message=message)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
+    # Local development entrypoint only. Bind the loopback interface instead of
+    # the 0.0.0.0 wildcard (CWE-668): the wildcard publishes this development
+    # server on every interface of the host, so an unhardened lab that is meant
+    # to be reachable from the local browser ends up reachable from the LAN as
+    # well. The container does not use this entrypoint -- it serves
+    # the app with the Flask CLI on the port published by docker-compose (see
+    # the Dockerfile), where binding all interfaces is what makes the mapped
+    # port reachable from the host.
+    app.run(host='127.0.0.1', port=8080)

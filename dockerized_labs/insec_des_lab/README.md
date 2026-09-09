@@ -60,6 +60,13 @@ pip install -r requirements.txt
 python main.py
 ```
 
+   This development server listens on `127.0.0.1:8080` only, so the lab is
+   reachable at http://localhost:8080 from the same machine and is not published
+   to the rest of the network (an intentionally vulnerable app should never be).
+   Inside Docker the app is still served on the port published by
+   `docker-compose` (`8080:8080`), because the container entrypoint binds all of
+   the *container's* interfaces (`FLASK_RUN_HOST=0.0.0.0` in the Dockerfile).
+
 ## Lab Structure
 
 ```

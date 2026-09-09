@@ -37,8 +37,12 @@ This is a deliberately vulnerable web application that demonstrates common authe
 > exposed an interactive console that could run arbitrary code inside the
 > container -- neither of which is an authentication lesson. If you prefer to run
 > the lab without Docker, `python app.py` still starts Flask's development
-> server on port 5000, also without debug mode. All the authentication
-> weaknesses below behave exactly the same under either entrypoint.
+> server on port 5000, also without debug mode; that server binds `127.0.0.1`
+> only, so the lab answers on http://localhost:5000 and is not published to the
+> rest of your network. The `0.0.0.0` in the gunicorn command above is the
+> container's own listener, which is what makes the `5000:5000` port mapping
+> reachable from the host. All the authentication weaknesses below behave
+> exactly the same under either entrypoint.
 
 ### Default Credentials
 

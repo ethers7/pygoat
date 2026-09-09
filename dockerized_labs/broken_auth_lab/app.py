@@ -216,4 +216,10 @@ if __name__ == '__main__':
     # The shipped container does not use this server at all -- it serves the app
     # with gunicorn ("app:app", see Dockerfile), which is the production WSGI
     # entrypoint on the same port 5000.
-    app.run(host='0.0.0.0', port=5000) 
+    # The bind address is the loopback interface rather than the 0.0.0.0
+    # wildcard (CWE-668): this development server is for the local browser only,
+    # and the wildcard would publish an intentionally vulnerable lab on every
+    # interface of the host machine. The container is unaffected -- gunicorn
+    # binds 0.0.0.0 inside the container namespace, which is what makes the
+    # port published by docker-compose reachable from the host.
+    app.run(host='127.0.0.1', port=5000) 
