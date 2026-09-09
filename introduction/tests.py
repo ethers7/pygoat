@@ -4,7 +4,8 @@ from unittest import mock
 from django.contrib.auth.models import User
 from django.test import SimpleTestCase, TestCase
 
-from .utility import safe_outbound_url
+from .models import comments
+from .utility import safe_outbound_url, safe_parse_comment_xml
 
 # A publicly routable literal used as an allowlisted destination so the tests
 # never depend on DNS resolution.
@@ -112,3 +113,88 @@ class SsrfLab2ViewTests(TestCase):
         self.assertEqual(args[0], "http://%s/blog" % PUBLIC_TEST_HOST)
         self.assertFalse(kwargs["allow_redirects"])
         self.assertTrue(kwargs["timeout"])
+
+
+EXTERNAL_ENTITY_XML = (
+    "<?xml version='1.0'?>"
+    "<!DOCTYPE comm [<!ELEMENT comm (#PCDATA)>"
+    " <!ENTITY xxe SYSTEM 'file:///etc/passwd'>]>"
+    "<comm><text>&xxe;</text></comm>")
+
+BILLION_LAUGHS_XML = (
+    "<?xml version='1.0'?>"
+    "<!DOCTYPE comm ["
+    "<!ENTITY a 'aaaaaaaaaa'>"
+    "<!ENTITY b '&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;'>"
+    "<!ENTITY c '&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;'>]>"
+    "<comm><text>&c;</text></comm>")
+
+
+class SafeParseCommentXmlTests(SimpleTestCase):
+    """Regression tests for the defused XML comment parser (CWE-611)."""
+
+    def test_parses_well_formed_document(self):
+        self.assertEqual(
+            safe_parse_comment_xml("<comm><text>hello world</text></comm>"),
+            "hello world")
+
+    def test_parses_well_formed_bytes_body(self):
+        self.assertEqual(
+            safe_parse_comment_xml(b"<comm><text>hello bytes</text></comm>"),
+            "hello bytes")
+
+    def test_rejects_external_entity_document(self):
+        with self.assertRaises(ValueError):
+            safe_parse_comment_xml(EXTERNAL_ENTITY_XML)
+
+    def test_rejects_entity_expansion_document(self):
+        with self.assertRaises(ValueError):
+            safe_parse_comment_xml(BILLION_LAUGHS_XML)
+
+    def test_rejects_malformed_oversized_and_non_text_documents(self):
+        for value in (
+                "<comm><text>unclosed</comm>",
+                "<comm><other>no text element</other></comm>",
+                "<comm><text>%s</text></comm>" % ("a" * (64 * 1024)),
+                b"\xff\xfe not utf-8",
+                None,
+                42):
+            with self.subTest(value=type(value)):
+                with self.assertRaises(ValueError):
+                    safe_parse_comment_xml(value)
+
+
+class XxeParseViewTests(TestCase):
+    """The lab still stores well formed comments but refuses XXE payloads."""
+
+    def setUp(self):
+        self.comment = comments.objects.create(name="System", comment="original comment")
+
+    def _stored_comment(self):
+        return comments.objects.get(pk=self.comment.pk).comment
+
+    def test_external_entity_payload_is_rejected(self):
+        response = self.client.post(
+            "/xxe_parse", data=EXTERNAL_ENTITY_XML, content_type="text/xml")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertContains(response, "Comment rejected", status_code=400)
+        self.assertNotContains(response, "root:", status_code=400)
+        self.assertEqual(self._stored_comment(), "original comment")
+
+    def test_entity_expansion_payload_is_rejected(self):
+        response = self.client.post(
+            "/xxe_parse", data=BILLION_LAUGHS_XML, content_type="text/xml")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertContains(response, "Comment rejected", status_code=400)
+        self.assertEqual(self._stored_comment(), "original comment")
+
+    def test_well_formed_comment_is_accepted(self):
+        response = self.client.post(
+            "/xxe_parse",
+            data="<comm><text>a harmless comment</text></comm>",
+            content_type="text/xml")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Comment rejected")

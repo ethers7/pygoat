@@ -12,6 +12,10 @@
     <img class="img" src="{% static 'Lab/image/xxe.jpg' %}"><br><br>
 
 
+    {% if message %}
+    <div class="alert alert-warning" role="alert">{{ message }}</div>
+    {% endif %}
+
     <form name="ajax" onsubmit="SendToServer()">
         <label for="comment">Comment Your Thoughts:</label>
         <input id="comment" type="text" name="comment">

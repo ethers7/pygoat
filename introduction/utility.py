@@ -6,6 +6,9 @@ import socket
 import uuid
 from urllib.parse import urlsplit, urlunsplit
 
+from defusedxml import DefusedXmlException
+from defusedxml.ElementTree import ParseError, fromstring
+
 from .models import *
 
 
@@ -137,6 +140,49 @@ def safe_outbound_url(value):
     if port is not None:
         netloc = '%s:%d' % (netloc, port)
     return urlunsplit((parts.scheme.lower(), netloc, parts.path, parts.query, ''))
+
+
+# XML documents posted to the comment lab are untrusted input. They are parsed
+# with defusedxml, which refuses doctype declarations, entity declarations and
+# external references, so neither XXE (CWE-611) nor entity expansion ("billion
+# laughs") payloads can be resolved by the parser.
+_XML_COMMENT_TAG = 'text'
+_MAX_XML_BODY_BYTES = 64 * 1024
+
+
+def safe_parse_comment_xml(body):
+    """Return the text of the <text> element of an untrusted XML document.
+
+    Raises ValueError when the document is oversized, not UTF-8, not well
+    formed, carries a doctype/entity/external reference or has no <text>
+    element. Callers must treat ValueError as "reject the request" and must
+    never fall back to an entity aware parser.
+    """
+    if isinstance(body, (bytes, bytearray)):
+        if len(body) > _MAX_XML_BODY_BYTES:
+            raise ValueError('the XML document is too large')
+        try:
+            body = bytes(body).decode('utf-8')
+        except UnicodeDecodeError:
+            raise ValueError('the XML document is not valid UTF-8')
+    if not isinstance(body, str):
+        raise ValueError('the XML document must be text')
+    if len(body) > _MAX_XML_BODY_BYTES:
+        raise ValueError('the XML document is too large')
+    try:
+        root = fromstring(body, forbid_dtd=True)
+    except DefusedXmlException:
+        raise ValueError(
+            'doctypes, entities and external references are not allowed')
+    except ParseError:
+        raise ValueError('the XML document is not well formed')
+    if root.tag == _XML_COMMENT_TAG:
+        node = root
+    else:
+        node = root.find('.//' + _XML_COMMENT_TAG)
+    if node is None:
+        raise ValueError('the XML document has no %s element' % _XML_COMMENT_TAG)
+    return ''.join(node.itertext())
 
 
 # import re

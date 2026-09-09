@@ -14,9 +14,6 @@ from hashlib import md5
 from io import BytesIO
 from random import randint
 from urllib.parse import urljoin
-from xml.dom.pulldom import START_ELEMENT, parseString
-from xml.sax import make_parser
-from xml.sax.handler import feature_external_ges
 
 import jwt
 import requests
@@ -38,7 +35,7 @@ from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
 from .utility import (customHash, filter_blog, safe_lookup_target,
-                      safe_outbound_url)
+                      safe_outbound_url, safe_parse_comment_xml)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -281,18 +278,18 @@ def xxe_see(request):
 
 @csrf_exempt
 def xxe_parse(request):
-
-    parser = make_parser()
-    parser.setFeature(feature_external_ges, True)
-    doc = parseString(request.body.decode('utf-8'), parser=parser)
-    for event, node in doc:
-        if event == START_ELEMENT and node.tagName == 'text':
-            doc.expandNode(node)
-            text = node.toxml()
-    startInd = text.find('>')
-    endInd = text.find('<', startInd)
-    text = text[startInd + 1:endInd:]
-    p=comments.objects.filter(id=1).update(comment=text)
+    # The posted document is untrusted: parse it with the defused parser so
+    # external entities and entity expansion are refused (CWE-611).
+    try:
+        text = safe_parse_comment_xml(request.body)
+    except ValueError as rejected:
+        logging.warning("Rejected XXE lab document: %s", rejected)
+        return render(
+            request,
+            'Lab/XXE/xxe_lab.html',
+            {"message": "Comment rejected: %s" % rejected},
+            status=400)
+    comments.objects.filter(id=1).update(comment=text)
 
     return render(request, 'Lab/XXE/xxe_lab.html')
 
