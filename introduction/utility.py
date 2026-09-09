@@ -1,7 +1,12 @@
 import hashlib
+import ipaddress
 import os
 import re
+import socket
 import uuid
+from urllib.parse import urljoin, urlsplit
+
+import requests
 
 from .models import *
 
@@ -16,6 +21,106 @@ def is_safe_host(value):
     if not isinstance(value, str):
         return False
     return _SAFE_HOST_RE.match(value) is not None
+
+
+_ALLOWED_URL_SCHEMES = ('http', 'https')
+_DEFAULT_PORTS = {'http': 80, 'https': 443}
+
+
+class UnsafeUrlError(ValueError):
+    """Raised when a user supplied URL must not be fetched server-side."""
+
+
+def _is_blocked_address(ip):
+    """True for addresses a server-side request must never reach (SSRF)."""
+    mapped = getattr(ip, 'ipv4_mapped', None)
+    if mapped is not None:
+        return _is_blocked_address(mapped)
+    sixtofour = getattr(ip, 'sixtofour', None)
+    if sixtofour is not None:
+        return _is_blocked_address(sixtofour)
+    return bool(
+        ip.is_loopback           # 127.0.0.0/8, ::1
+        or ip.is_link_local      # 169.254.0.0/16 (incl. 169.254.169.254), fe80::/10
+        or ip.is_private         # 10/8, 172.16/12, 192.168/16, fc00::/7
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified     # 0.0.0.0, ::
+    )
+
+
+def _resolve_addresses(hostname, port, resolver):
+    """Return every IP the host resolves to, or raise UnsafeUrlError."""
+    try:
+        return [ipaddress.ip_address(hostname)]
+    except ValueError:
+        pass
+    try:
+        infos = resolver(hostname, port, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, socket.herror, UnicodeError, ValueError):
+        raise UnsafeUrlError('The host %s could not be resolved.' % hostname)
+    addresses = []
+    for info in infos:
+        try:
+            addresses.append(ipaddress.ip_address(info[4][0].split('%')[0]))
+        except ValueError:
+            raise UnsafeUrlError(
+                'The host %s resolved to an unusable address.' % hostname)
+    if not addresses:
+        raise UnsafeUrlError('The host %s could not be resolved.' % hostname)
+    return addresses
+
+
+def validate_public_url(url, allowed_hosts=None, resolver=socket.getaddrinfo):
+    """Validate a user supplied URL before it is requested server-side.
+
+    Returns the normalised URL. Raises UnsafeUrlError when the URL does not use
+    http/https, when its host is absent or not in ``allowed_hosts`` (when an
+    allowlist is supplied), or when the host resolves to a loopback,
+    link-local, private, reserved, multicast or unspecified address - which
+    covers the cloud metadata endpoint 169.254.169.254 as well as 127.0.0.0/8,
+    10/8, 172.16/12, 192.168/16, ::1 and fc00::/7.
+    """
+    if not isinstance(url, str) or not url.strip():
+        raise UnsafeUrlError('A URL is required.')
+    parts = urlsplit(url.strip())
+    scheme = parts.scheme.lower()
+    if scheme not in _ALLOWED_URL_SCHEMES:
+        raise UnsafeUrlError('Only http and https URLs are allowed.')
+    hostname = parts.hostname
+    if not hostname:
+        raise UnsafeUrlError('The URL must contain a host name.')
+    if allowed_hosts is not None and hostname not in allowed_hosts:
+        raise UnsafeUrlError('The host %s is not on the allowlist.' % hostname)
+    try:
+        port = parts.port or _DEFAULT_PORTS[scheme]
+    except ValueError:
+        raise UnsafeUrlError('The URL contains an invalid port.')
+    for address in _resolve_addresses(hostname, port, resolver):
+        if _is_blocked_address(address):
+            raise UnsafeUrlError(
+                'The URL resolves to the non-routable address %s.' % address)
+    return parts.geturl()
+
+
+def fetch_url_safely(url, allowed_hosts=None, timeout=5, max_redirects=3):
+    """GET a user supplied URL with SSRF protection.
+
+    Redirects are not followed by requests; each hop is validated with
+    validate_public_url before it is fetched, because a single up-front check
+    is bypassed by a redirect to an internal address.
+    """
+    target = validate_public_url(url, allowed_hosts=allowed_hosts)
+    for _ in range(max_redirects + 1):
+        response = requests.get(target, timeout=timeout, allow_redirects=False)
+        if not response.is_redirect and not response.is_permanent_redirect:
+            return response
+        location = response.headers.get('Location', '')
+        if not location:
+            return response
+        target = validate_public_url(urljoin(target, location),
+                                     allowed_hosts=allowed_hosts)
+    raise UnsafeUrlError('The URL redirected too many times.')
 
 
 def ssrf_code_converter(code):

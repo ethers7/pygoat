@@ -8,6 +8,7 @@
     {% if error %}
     <div class="alert alert-danger" role="alert">
         {{ error }}
+    </div>
     {% endif %}
 
     <form method="POST">
@@ -35,12 +36,14 @@ def ssrf_lab2(request):<br>
 &emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html")<br>
 <br>
 &emsp;elif request.method == "POST":<br>
-&emsp;&emsp;url = request.POST["url"]<br>
+&emsp;&emsp;url = request.POST.get("url", "")<br>
 &emsp;&emsp;try:<br>
-&emsp;&emsp;&emsp;response = requests.get(url)<br>
-&emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})<br>
-&emsp;&emsp;except:<br>
+&emsp;&emsp;&emsp;response = fetch_url_safely(url)&nbsp;# validates scheme/host, blocks internal + metadata IPs, re-checks redirects<br>
+&emsp;&emsp;except UnsafeUrlError as exc:<br>
+&emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": str(exc)})<br>
+&emsp;&emsp;except requests.RequestException:<br>
 &emsp;&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})<br>
+&emsp;&emsp;return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode(errors="replace")})<br>
    </code>
     
 </div>

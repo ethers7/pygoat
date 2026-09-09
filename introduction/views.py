@@ -36,7 +36,8 @@ from requests.structures import CaseInsensitiveDict
 from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
-from .utility import customHash, filter_blog, is_safe_host
+from .utility import (UnsafeUrlError, customHash, fetch_url_safely,
+                      filter_blog, is_safe_host)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -997,12 +998,17 @@ def ssrf_lab2(request):
         return render(request, "Lab/ssrf/ssrf_lab2.html")
 
     elif request.method == "POST":
-        url = request.POST["url"]
+        url = request.POST.get("url", "")
+        # Validate scheme/host and reject internal, loopback, link-local and
+        # metadata addresses before (and on every redirect hop of) the request.
         try:
-            response = requests.get(url)
-            return render(request, "Lab/ssrf/ssrf_lab2.html", {"response": response.content.decode()})
-        except:
+            response = fetch_url_safely(url)
+        except UnsafeUrlError as exc:
+            return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": str(exc)})
+        except requests.RequestException:
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
+        return render(request, "Lab/ssrf/ssrf_lab2.html",
+                      {"response": response.content.decode(errors="replace")})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
 def ssti(request):
