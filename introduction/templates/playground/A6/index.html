@@ -14,6 +14,8 @@
     <span>Lets go</span>
 </button>
 <div id="a9_d1" style="display:none;flex-direction:column;align-items:center">
+    {# Server-rendered per-session CSRF token, read at runtime by a9.js #}
+    {% csrf_token %}
     <div id="textarea2">
         <h5>utility.py</h5>
         <textarea id="a6_t1" placeholder="">

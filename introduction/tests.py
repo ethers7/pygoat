@@ -1,9 +1,11 @@
 from django.contrib.auth.hashers import is_password_usable
 from django.contrib.auth.models import User
-from django.test import SimpleTestCase, TestCase, override_settings
+from django.test import Client, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
+from . import apis, mitre, views
 from .models import CF_user, CSRF_user_tbl, comments
+from .playground.A9.api import log_function_target
 from .utility import (UnsafeExpressionError, UnsafeUrlError,
                       hash_lab_password, safe_arithmetic_eval,
                       validate_public_url, verify_lab_password)
@@ -261,3 +263,99 @@ class LabLoginHashingTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response["Location"], "/mitre/9/lab/login")
         self.assertNotIn("auth_cookiee", response.cookies)
+
+
+# DEBUG=False + django-heroku's manifest static storage makes {% static %} fail
+# without collectstatic, so mirror tests_platform.py and force plain storage.
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+)
+class CsrfProtectionTests(TestCase):
+    """Regression tests for the removal of @csrf_exempt (CWE-352).
+
+    These routes used to opt out of Django's CSRF protection. They must now
+    reject state changing requests that carry no token, while still working for
+    a normal browser session that submits the token rendered by the
+    ``{% csrf_token %}`` template tag.
+    """
+
+    PASSWORD = "Str0ng-Passw0rd!"
+
+    # One entry per view that carried @csrf_exempt.
+    PROTECTED_VIEWS = (
+        views.xxe_see, views.xxe_parse, views.ba, views.ba_lab,
+        views.cmd_lab, views.cmd_lab2, views.Otp, views.a9_lab,
+        views.a9_lab2, views.a1_broken_access, views.a1_broken_access_lab_1,
+        views.a1_broken_access_lab_2, views.injection, views.injection_sql_lab,
+        views.auth_failure_lab3,
+        apis.ssrf_code_checker, apis.log_function_checker,
+        apis.A7_disscussion_api, apis.A6_disscussion_api,
+        apis.A6_disscussion_api_2,
+        mitre.csrf_transfer_monei, mitre.mitre_lab_25_api,
+        mitre.mitre_lab_17_api,
+        log_function_target,
+    )
+
+    # Routes whose unsafe requests must now be rejected without a token.
+    UNSAFE_ROUTES = (
+        "/ba_lab",
+        "/cmd_lab",
+        "/cmd_lab2",
+        "/otp",
+        "/a9_lab",
+        "/a9_lab2",
+        "/broken_access_lab_1",
+        "/broken_access_lab_2",
+        "/injection_sql_lab",
+        "/xxe_parse",
+        "/mitre/17/lab/api",
+        "/mitre/25/lab/api",
+        "/2021/discussion/A6/api",
+        "/2021/discussion/A6/api2",
+        "/2021/discussion/A7/api",
+        "/2021/discussion/A9/target",
+    )
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="csrfuser",
+                                            password=self.PASSWORD)
+
+    def enforcing_client(self):
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(self.user)
+        return client
+
+    def test_no_view_is_csrf_exempt(self):
+        for view in self.PROTECTED_VIEWS:
+            self.assertFalse(getattr(view, "csrf_exempt", False),
+                             msg=getattr(view, "__name__", repr(view)))
+
+    def test_post_without_token_is_rejected(self):
+        client = self.enforcing_client()
+        for url in self.UNSAFE_ROUTES:
+            self.assertEqual(client.post(url, {}).status_code, 403, msg=url)
+
+    def test_form_page_renders_token_and_post_with_token_succeeds(self):
+        """A normal browser session still completes the lab flow."""
+        client = self.enforcing_client()
+        page = client.get("/cmd_lab")
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, "csrfmiddlewaretoken")
+        token = page.cookies["csrftoken"].value
+        response = client.post("/cmd_lab", {"domain": "example.com; id",
+                                            "os": "nix",
+                                            "csrfmiddlewaretoken": token})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Invalid domain name")
+
+    def test_api_accepts_token_in_header(self):
+        """The fetch/XHR callers send the token in the X-CSRFToken header."""
+        client = self.enforcing_client()
+        page = client.get("/mitre/25/lab")
+        self.assertEqual(page.status_code, 200)
+        token = page.cookies["csrftoken"].value
+        response = client.post("/mitre/25/lab/api", {"expression": "7*7"},
+                               HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["result"], 49)

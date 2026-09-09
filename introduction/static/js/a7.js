@@ -6,6 +6,8 @@ event4 = function(){
 
     var formdata = new FormData();
     formdata.append("code", code);
+    // The API is CSRF protected: send the per-session token rendered by Django.
+    formdata.append("csrfmiddlewaretoken", getCsrfToken());
 
     var requestOptions = {
     method: 'POST',

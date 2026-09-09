@@ -13,6 +13,8 @@
 
 
     <form name="ajax" onsubmit="SendToServer()">
+        {# Per-session CSRF token, sent as the X-CSRFToken header by xss.js #}
+        {% csrf_token %}
         <label for="comment">Comment Your Thoughts:</label>
         <input id="comment" type="text" name="comment">
         <input type="hidden" id="Url" data-url="{% url 'xxe_parse' %}" />

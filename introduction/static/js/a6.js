@@ -4,10 +4,14 @@ event5 = function(){
     var formdata = new FormData();
 
     formdata.append("code", code);
+    // The API is CSRF protected: send the per-session token rendered by Django
+    // (getCsrfToken() is defined in a9.js, which this page also loads).
+    formdata.append("csrfmiddlewaretoken", getCsrfToken());
     var requestOptions = {
         method: 'POST',
         headers: myHeaders,
         body: formdata,
+        credentials: 'same-origin',
         redirect: 'follow'
     };
     fetch("/2021/discussion/A6/api2", requestOptions)
@@ -27,10 +31,14 @@ event6 = function(){
     var formdata = new FormData();
 
     formdata.append("code", code);
+    // The API is CSRF protected: send the per-session token rendered by Django
+    // (getCsrfToken() is defined in a9.js, which this page also loads).
+    formdata.append("csrfmiddlewaretoken", getCsrfToken());
     var requestOptions = {
         method: 'POST',
         headers: myHeaders,
         body: formdata,
+        credentials: 'same-origin',
         redirect: 'follow'
     };
     fetch("/2021/discussion/A6/api", requestOptions)

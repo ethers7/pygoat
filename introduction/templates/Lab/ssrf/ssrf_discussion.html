@@ -91,6 +91,8 @@
             </div>
         </div>
         <div id="ssrf-frame-4">
+            {# Per-session CSRF token, sent as the X-CSRFToken header by ssrf.js #}
+            {% csrf_token %}
             <h2>Now Lets fix the code :)</h2>
             <p class="problem-Statement-desc">
                 <strong>Problem Statement : </strong>

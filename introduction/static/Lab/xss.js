@@ -35,6 +35,11 @@ function SendToServer(){
         var url = $("#Url").attr("data-url");
        xhr.open("POST", url, true);
        xhr.setRequestHeader("Content-Type", "text/xml");
+       // The endpoint is CSRF protected, so forward the per-session token that
+       // Django's {% csrf_token %} tag rendered into the form. No token value is
+       // stored in this file.
+       var csrfField = document.querySelector("input[name=csrfmiddlewaretoken]");
+       xhr.setRequestHeader("X-CSRFToken", csrfField ? csrfField.value : "");
        xhr.send(xml);
 
 }

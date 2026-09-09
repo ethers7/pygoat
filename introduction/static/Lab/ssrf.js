@@ -62,9 +62,15 @@ function checkcode(){
     var formdata = new FormData();
     formdata.append('python_code', python_code);
     formdata.append('html_code', html_code);
+    // The checker API is CSRF protected: forward the per-session token that
+    // Django's {% csrf_token %} tag rendered on the page. No token value is
+    // stored in this file.
+    var csrfField = document.querySelector('input[name=csrfmiddlewaretoken]');
+    formdata.append('csrfmiddlewaretoken', csrfField ? csrfField.value : '');
     var requestOptions = {
         method: 'POST',
         body: formdata,
+        credentials: 'same-origin',
         redirect: 'follow'
       };
       

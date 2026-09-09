@@ -24,12 +24,16 @@
             var input = document.getElementById("input").value;
             var output = document.getElementById("output");
             var headers = new Headers();
+            // The API is CSRF protected: send the per-session token rendered by
+            // Django for this response, along with the same-origin cookies.
+            headers.append("X-CSRFToken", "{{ csrf_token }}");
             var formdata = new FormData();
             formdata.append("ip", input);
             var requestOption = {
                 method: "POST",
                 body: formdata,
                 redirect: "follow",
+                credentials: "same-origin",
                 headers: headers
             };
             output.innerHTML = "";
