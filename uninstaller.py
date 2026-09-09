@@ -36,12 +36,15 @@ def uninstall_pip_packages():
 
     try:
         # It is important to upgrade pip first to avoid environment errors
+        # Fixed argv lists with shell=False: no element is ever parsed as shell
+        # syntax, so nothing in the environment can extend these commands.
         if (platform.system != 'Windows'):
             pip_v = "pip3" if (which('pip3') is not None) else "pip"
             subprocess.run([pip_v,
                             "install",
                             "--upgrade",
                             "pip"],
+                           shell=False,
                            stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL)
         subprocess.check_call([sys.executable,
@@ -49,7 +52,8 @@ def uninstall_pip_packages():
                                "pip",
                                "uninstall",
                                "-yr",
-                               "requirements.txt"])
+                               "requirements.txt"],
+                              shell=False)
     except subprocess.CalledProcessError:
         print(colorama.Fore.RED + colorama.Style.BRIGHT + "[!] Failed to uninstall pip packages" + colorama.Style.RESET_ALL)
 
@@ -59,12 +63,14 @@ def uninstall_pip():
     """Remove Pip"""
     print(colorama.Back.RED + colorama.Style.BRIGHT + "[+] Uninstalling Pip!" + colorama.Style.RESET_ALL)
     try:
+        # Fixed argv list with shell=False: never a shell command string.
         subprocess.check_call([sys.executable,
                                "-m",
                                "pip",
                                "uninstall",
                                "-y",
-                               "pip"])
+                               "pip"],
+                              shell=False)
     except subprocess.CalledProcessError:
         print(colorama.Fore.RED + colorama.Style.BRIGHT + "[!] Failed to uninstall pip" + colorama.Style.RESET_ALL)
 

@@ -3,7 +3,7 @@ from django.shortcuts import redirect, render
 from django.views.generic import View
 from django.views.decorators.csrf import csrf_exempt
 import subprocess
-from .utility import get_free_port, safe_container_id
+from .utility import get_free_port, safe_container_id, safe_docker_image
 from .models import Challenge, UserChallenge
 # Create your views here.
 
@@ -46,8 +46,21 @@ class DoItFast(View):
         if port == None:
             return JsonResponse({'message': 'failed', 'status': '500', 'endpoint': 'None'})
         
-        command = f"docker run -d -p {port}:{chal.docker_port} {chal.docker_image}"
-        process = subprocess.Popen(command.split(" "), stdout=subprocess.PIPE)
+        # Only a validated image reference and numeric ports may reach the docker
+        # command; anything else fails closed instead of being run.
+        image = safe_docker_image(chal.docker_image)
+        if image is None:
+            return JsonResponse({'message': 'failed', 'status': '500', 'endpoint': 'None'})
+        try:
+            port_mapping = '%d:%d' % (int(port), int(chal.docker_port))
+        except (TypeError, ValueError):
+            return JsonResponse({'message': 'failed', 'status': '500', 'endpoint': 'None'})
+
+        # argv list + shell=False: the port mapping and the image are each a
+        # single, non-interpreted argument, so no value can be split into extra
+        # docker options or parsed as shell syntax.
+        command = ['docker', 'run', '-d', '-p', port_mapping, image]
+        process = subprocess.Popen(command, shell=False, stdout=subprocess.PIPE)
         output, error = process.communicate()
         container_id = output.decode('utf-8').strip()
         

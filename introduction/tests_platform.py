@@ -10,6 +10,7 @@ plain StaticFilesStorage so we gate routes/auth, not WhiteNoise manifests.
 """
 import base64
 import inspect
+import pathlib
 import re
 from hashlib import md5
 
@@ -165,6 +166,16 @@ class CommandInjectionRegressionTests(TestCase):
 
         with self.assertRaises(TypeError):
             command_out("nmap 127.0.0.1; id")
+
+    def test_command_modules_never_spawn_a_shell(self):
+        """No module that spawns processes may hand a command string to a shell."""
+        from . import mitre, views
+
+        sources = [inspect.getsource(views), inspect.getsource(mitre)]
+        lab_code = pathlib.Path(__file__).resolve().parent / "lab_code" / "test.py"
+        sources.append(lab_code.read_text(encoding="utf-8"))
+        for source in sources:
+            self.assertNotIn("shell=True", source)
 
 
 @override_settings(
