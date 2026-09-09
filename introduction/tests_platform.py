@@ -8,10 +8,17 @@ DEBUG=False, so {% static %} blows up without collectstatic (and collectstatic
 fails upstream on a missing font). Gunicorn smoke uses DEBUG=True. Tests force
 plain StaticFilesStorage so we gate routes/auth, not WhiteNoise manifests.
 """
+import inspect
+import re
+from hashlib import md5
+
+import jwt
+from django.conf import settings
 from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
+from .models import CSRF_user_tbl
 from .utility import safe_lookup_target
 
 
@@ -155,3 +162,79 @@ class CommandInjectionRegressionTests(TestCase):
 
         with self.assertRaises(TypeError):
             command_out("nmap 127.0.0.1; id")
+
+
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+    CSRF_LAB_JWT_KEY="unit-test-csrf-lab-signing-key",
+)
+class CsrfLabJwtKeyTests(TestCase):
+    """CWE-522: the CSRF lab JWT must use a runtime-supplied signing key.
+
+    Gates that the lab still issues and accepts its cookie, and that the key
+    comes from settings rather than a literal in introduction/mitre.py.
+    """
+
+    PASSWORD = "Str0ng-Passw0rd!"
+    LAB_USERNAME = "csrflabuser"
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="jwtgateuser",
+            email="jwtgateuser@example.com",
+            password=self.PASSWORD,
+        )
+        self.lab_user = CSRF_user_tbl.objects.create(
+            username=self.LAB_USERNAME,
+            password=md5(self.PASSWORD.encode()).hexdigest(),
+            balance=100,
+        )
+        self.client.force_login(self.user)
+
+    def _login_cookie(self):
+        r = self.client.post(
+            reverse("csrf_lab_login"),
+            {"username": self.LAB_USERNAME, "password": self.PASSWORD},
+        )
+        self.assertEqual(r.status_code, 302)
+        self.assertIn("auth_cookiee", r.cookies)
+        return r.cookies["auth_cookiee"].value
+
+    def test_no_signing_key_literal_in_mitre_module(self):
+        from . import mitre
+
+        source = inspect.getsource(mitre)
+        literal_key = re.search(
+            r"jwt\.(?:encode|decode)\(\s*[\w\[\]'\"]+\s*,\s*['\"]", source
+        )
+        self.assertIsNone(
+            literal_key,
+            msg="jwt.encode/decode must take the key from settings, not a literal",
+        )
+
+    def test_lab_cookie_is_signed_with_configured_key(self):
+        cookie = self._login_cookie()
+        payload = jwt.decode(
+            cookie, settings.CSRF_LAB_JWT_KEY, algorithms=["HS256"]
+        )
+        self.assertEqual(payload["username"], self.LAB_USERNAME)
+
+    def test_lab_cookie_rejects_other_keys(self):
+        cookie = self._login_cookie()
+        with self.assertRaises(jwt.InvalidSignatureError):
+            jwt.decode(cookie, "some-other-key", algorithms=["HS256"])
+
+    def test_dashboard_accepts_cookie_from_configured_key(self):
+        self.client.cookies["auth_cookiee"] = self._login_cookie()
+        r = self.client.get("/mitre/9/lab/transaction")
+        self.assertEqual(r.status_code, 200)
+
+    def test_dashboard_rejects_cookie_signed_with_foreign_key(self):
+        forged = jwt.encode(
+            {"username": self.LAB_USERNAME}, "some-other-key", algorithm="HS256"
+        )
+        self.client.cookies["auth_cookiee"] = forged
+        r = self.client.get("/mitre/9/lab/transaction")
+        self.assertEqual(r.status_code, 302)
+        self.assertIn("/mitre/9/lab/login", r["Location"])
