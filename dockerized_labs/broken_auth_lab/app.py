@@ -216,4 +216,14 @@ if __name__ == '__main__':
     # way as SESSION_COOKIE_SECURE above. The lab still comes up on
     # http://localhost:5000 (see docker-compose.yml and README.md) with it off.
     FLASK_DEBUG = os.environ.get('FLASK_DEBUG', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
-    app.run(host='0.0.0.0', port=5000, debug=FLASK_DEBUG) 
+
+    # CWE-668: host='0.0.0.0' bound the development server to every interface,
+    # so a lab started on a workstation or CI box was reachable by anyone on the
+    # network. The bind address now comes from the environment (read the same way
+    # as SESSION_COOKIE_SECURE above, just as a plain string) and defaults to
+    # loopback, so a plain `python app.py` only listens on 127.0.0.1. The
+    # container path asks for every interface explicitly with
+    # FLASK_RUN_HOST=0.0.0.0 (see Dockerfile and docker-compose.yml), which is
+    # what makes the published port keep serving http://localhost:5000.
+    FLASK_RUN_HOST = os.environ.get('FLASK_RUN_HOST', '127.0.0.1').strip()
+    app.run(host=FLASK_RUN_HOST, port=5000, debug=FLASK_DEBUG)

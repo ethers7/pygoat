@@ -8,6 +8,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 ENV FLASK_APP=main.py
+# Used by `flask run` below and by main.py's app.run(), which otherwise binds
+# loopback only and would not be reachable through the published port.
 ENV FLASK_RUN_HOST=0.0.0.0
 
 # Run the lab as an unprivileged user instead of root.

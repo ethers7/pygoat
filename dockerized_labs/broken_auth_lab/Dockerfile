@@ -13,6 +13,9 @@ COPY . .
 ENV FLASK_APP=app.py
 ENV FLASK_ENV=development
 ENV PYTHONUNBUFFERED=1
+# app.py defaults to binding loopback only; inside the container it has to bind
+# every interface or the published port (see docker-compose.yml) cannot reach it.
+ENV FLASK_RUN_HOST=0.0.0.0
 
 # Run the lab as an unprivileged user instead of root.
 # uid/gid 1000 matches the usual host user so the bind-mounted /app

@@ -157,4 +157,13 @@ def deserialize_data():
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
+    # CWE-668: host='0.0.0.0' bound the development server to every interface,
+    # so a lab started on a workstation or CI box was reachable by anyone on the
+    # network. The bind address now comes from the environment (same
+    # os.environ.get shape as TOKEN_SIGNING_KEY above) and defaults to loopback,
+    # so a plain `python main.py` only listens on 127.0.0.1. The container path
+    # asks for every interface explicitly with FLASK_RUN_HOST=0.0.0.0 (see
+    # Dockerfile and docker-compose.yml), which is what makes the published port
+    # keep serving http://localhost:8080 (see README.md).
+    FLASK_RUN_HOST = os.environ.get('FLASK_RUN_HOST', '127.0.0.1').strip()
+    app.run(host=FLASK_RUN_HOST, port=8080)

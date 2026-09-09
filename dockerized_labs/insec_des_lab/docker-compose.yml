@@ -7,4 +7,8 @@ services:
       - .:/app
     environment:
       - FLASK_ENV=development
+      # main.py binds loopback unless told otherwise; the container needs every
+      # interface so the 8080:8080 mapping above serves http://localhost:8080.
+      # Also consumed by `flask run` in the image CMD (see Dockerfile).
+      - FLASK_RUN_HOST=0.0.0.0
     restart: unless-stopped

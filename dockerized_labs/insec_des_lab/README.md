@@ -60,6 +60,8 @@ pip install -r requirements.txt
 python main.py
 ```
 
+The server listens on `127.0.0.1:8080` by default, so it is only reachable from the machine running it. Set `FLASK_RUN_HOST=0.0.0.0` to bind every interface (the Docker setup above does this so the published port works); only do that on a network you trust, because this lab is intentionally vulnerable.
+
 ## Lab Structure
 
 ```
