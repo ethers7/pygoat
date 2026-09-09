@@ -62,6 +62,16 @@ class PlatformRegressionTests(TestCase):
         self.assertEqual(self.client.get("/cmd").status_code, 200)
         self.assertEqual(self.client.get("/cmd_lab").status_code, 200)
 
+    def test_cmd_lab_rejects_shell_metacharacters(self):
+        self.client.force_login(self.user)
+        r = self.client.post("/cmd_lab", {"domain": "example.com; id", "os": "nix"})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Invalid domain name")
+
+    def test_mitre_17_api_rejects_shell_metacharacters(self):
+        r = self.client.post("/mitre/17/lab/api", {"ip": "127.0.0.1; id"})
+        self.assertEqual(r.status_code, 400)
+
     def test_other_lesson_pages_still_route(self):
         self.client.force_login(self.user)
         for name in ("xss", "sql"):

@@ -9,6 +9,7 @@ from django.shortcuts import redirect, render
 from django.views.decorators.csrf import csrf_exempt
 
 from .models import CSRF_user_tbl
+from .utility import is_safe_host
 from .views import authentication_decorator
 
 # import os
@@ -230,7 +231,15 @@ def mitre_lab_17(request):
     return render(request, 'mitre/mitre_lab_17.html')
 
 def command_out(command):
-    process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    """Run an argv sequence without a shell and return (stdout, stderr).
+
+    ``command`` must be a list/tuple of arguments. With shell=False each element
+    is passed straight to execve, so user supplied values cannot be interpreted
+    as shell metacharacters.
+    """
+    if isinstance(command, (str, bytes)):
+        raise TypeError("command_out() requires an argv sequence, not a shell string")
+    process = subprocess.Popen(list(command), shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return process.communicate()
     
 
@@ -238,7 +247,10 @@ def command_out(command):
 def mitre_lab_17_api(request):
     if request.method == "POST":
         ip = request.POST.get('ip')
-        command = "nmap " + ip 
+        # Allowlist the untrusted portion before it becomes an argv element.
+        if not is_safe_host(ip):
+            return HttpResponseBadRequest("Invalid host")
+        command = ["nmap", ip]
         res, err = command_out(command)
         res = res.decode()
         err = err.decode()

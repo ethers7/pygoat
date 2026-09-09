@@ -1,11 +1,23 @@
 import hashlib
 import os
+import re
 import uuid
 
 from .models import *
 
+# Hostname / IPv4-shaped values only. Rejects whitespace, shell metacharacters
+# (; | & $ ` ( ) < > newline ...) and a leading '-' so a validated value is safe
+# to pass as a single argv element of a subprocess call.
+_SAFE_HOST_RE = re.compile(r'^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,253}[A-Za-z0-9])?$')
 
-# import re
+
+def is_safe_host(value):
+    """Return True when value is a plain hostname/IP usable as one argv element."""
+    if not isinstance(value, str):
+        return False
+    return _SAFE_HOST_RE.match(value) is not None
+
+
 def ssrf_code_converter(code):
     list_input = code.split("\n")
     del_l = []
