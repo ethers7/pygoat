@@ -1,5 +1,8 @@
+import os
 import re
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from django.contrib.auth.hashers import is_password_usable
 from django.contrib.auth.models import User
@@ -7,11 +10,15 @@ from django.test import Client, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
 from . import apis, mitre, views
-from .models import CF_user, CSRF_user_tbl, authLogin, comments
+from .models import Blogs, CF_user, CSRF_user_tbl, authLogin, comments
 from .playground.A9.api import log_function_target
-from .utility import (UnsafeExpressionError, UnsafeUrlError,
-                      hash_lab_password, safe_arithmetic_eval,
-                      validate_public_url, verify_lab_password)
+from .utility import (MAX_BLOG_BODY_BYTES, MAX_LAB_CODE_BYTES,
+                      SubmittedContentTooLargeError, UnsafeExpressionError,
+                      UnsafeUrlError, UnsafeWritePathError, filter_blog,
+                      hash_lab_password, resolve_inside_directory,
+                      safe_arithmetic_eval, validate_public_url,
+                      validate_submitted_text, verify_lab_password,
+                      write_text_atomically, write_text_exclusively)
 
 # Create your tests here.
 
@@ -497,3 +504,328 @@ class AuthLabResponseEscapingTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Logout successful")
         self.assertEqual(response.cookies["userid"].value, "")
+
+
+class LabFileWriteGuardTests(SimpleTestCase):
+    """Unit tests for the guards around lab file writes (CWE-93).
+
+    Several labs store text a student posted in a file. The submission is size
+    capped so a caller cannot fill the disk or roll a large file over, the
+    destination is resolved inside a fixed directory, and the content is written
+    in one step instead of being appended to an existing file.
+    """
+
+    def test_accepts_text_within_the_limit(self):
+        self.assertEqual(validate_submitted_text("print(1)", 32), "print(1)")
+        self.assertEqual(validate_submitted_text("", 32), "")
+
+    def test_rejects_oversize_text(self):
+        with self.assertRaises(SubmittedContentTooLargeError):
+            validate_submitted_text("a" * 33, 32)
+        # The cap is on encoded bytes, so multi byte characters count fully.
+        with self.assertRaises(SubmittedContentTooLargeError):
+            validate_submitted_text("é" * 17, 32)
+
+    def test_rejects_missing_or_non_text_content(self):
+        for value in (None, 42, b"bytes", ["code"]):
+            with self.assertRaises(SubmittedContentTooLargeError, msg=repr(value)):
+                validate_submitted_text(value, 32)
+
+    def test_resolves_a_bare_name_inside_the_directory(self):
+        with TemporaryDirectory() as tmp:
+            target = resolve_inside_directory(tmp, "utility.py")
+            self.assertEqual(os.path.dirname(target), os.path.realpath(tmp))
+            self.assertEqual(os.path.basename(target), "utility.py")
+
+    def test_rejects_names_that_leave_the_directory(self):
+        with TemporaryDirectory() as tmp:
+            for name in ("../settings.py", "../../etc/passwd", "sub/utility.py",
+                         "/etc/passwd", "..", ".", "", "   ", None, 7):
+                with self.assertRaises(UnsafeWritePathError, msg=repr(name)):
+                    resolve_inside_directory(tmp, name)
+
+    def test_rejects_a_symlink_pointing_outside_the_directory(self):
+        with TemporaryDirectory() as tmp, TemporaryDirectory() as outside:
+            secret = os.path.join(outside, "secret.txt")
+            with open(secret, "w", encoding="utf-8") as handle:
+                handle.write("secret")
+            try:
+                os.symlink(secret, os.path.join(tmp, "utility.py"))
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks are not supported on this platform")
+            with self.assertRaises(UnsafeWritePathError):
+                resolve_inside_directory(tmp, "utility.py")
+
+    def test_atomic_write_replaces_content_and_leaves_no_partial_file(self):
+        with TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "main.py")
+            write_text_atomically(target, "first")
+            write_text_atomically(target, "second")
+            with open(target, encoding="utf-8") as handle:
+                # Replaced, never appended to the file that was already there.
+                self.assertEqual(handle.read(), "second")
+            self.assertEqual(os.listdir(tmp), ["main.py"])
+
+    def test_exclusive_write_never_touches_an_existing_file(self):
+        with TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "blog.txt")
+            write_text_exclusively(target, "body")
+            with self.assertRaises(FileExistsError):
+                write_text_exclusively(target, "overwritten")
+            with open(target, encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "body")
+
+
+class FilterBlogTests(SimpleTestCase):
+    """``filter_blog`` used to return its input unchanged.
+
+    It is the sanitiser the SSTI lab runs a blog body through, so it must now
+    actually neutralise Django template syntax (CWE-1336).
+    """
+
+    DELIMITERS = ("{%", "%}", "{{", "}}", "{#", "#}")
+
+    def test_strips_template_constructs(self):
+        cleaned = filter_blog("hi {{7*7}} {% load log %}{# note #} there")
+        for delimiter in self.DELIMITERS:
+            self.assertNotIn(delimiter, cleaned)
+        self.assertIn("hi", cleaned)
+        self.assertIn("there", cleaned)
+
+    def test_strips_unbalanced_delimiters(self):
+        for payload in ("{% load log", "7*7}}", "{{ 7*7", "{#", "#}"):
+            cleaned = filter_blog(payload)
+            for delimiter in self.DELIMITERS:
+                self.assertNotIn(delimiter, cleaned, msg=payload)
+
+    def test_keeps_plain_text_and_fails_closed_on_non_text(self):
+        self.assertEqual(filter_blog("a normal blog post"), "a normal blog post")
+        self.assertEqual(filter_blog(None), "")
+
+
+# DEBUG=False + django-heroku's manifest static storage makes {% static %} fail
+# without collectstatic, so mirror tests_platform.py and force plain storage.
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+)
+class PlaygroundCodeWriteTests(TestCase):
+    """Regression tests for the playground code editors (CWE-93).
+
+    ``/2021/discussion/A9/api`` and ``/2021/discussion/A6/api2`` store the code
+    a student submits in the playground package the labs import. They used to
+    pass the posted body straight to ``open(...).write()``, so an unauthenticated
+    caller could write an unbounded amount of data into those files. They now
+    require a session, cap the submission and write to a destination pinned to
+    the playground directory.
+    """
+
+    PASSWORD = "Str0ng-Passw0rd!"
+    APP_DIR = os.path.dirname(os.path.abspath(views.__file__))
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="playgrounduser",
+                                             password=self.PASSWORD)
+
+    def logged_in_client(self, enforce_csrf_checks=False):
+        client = Client(enforce_csrf_checks=enforce_csrf_checks)
+        client.force_login(self.user)
+        return client
+
+    def read(self, path):
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_destinations_are_pinned_inside_the_playground_directory(self):
+        playground = os.path.realpath(os.path.join(self.APP_DIR, "playground"))
+        targets = {
+            resolve_inside_directory(apis.A9_PLAYGROUND_DIR, "main.py"),
+            resolve_inside_directory(apis.A9_PLAYGROUND_DIR, "api.py"),
+            resolve_inside_directory(apis.A6_PLAYGROUND_DIR, "utility.py"),
+        }
+        self.assertEqual(len(targets), 3)
+        for target in targets:
+            self.assertTrue(target.startswith(playground + os.sep), msg=target)
+            self.assertTrue(os.path.exists(target), msg=target)
+
+    def test_a9_api_requires_a_session(self):
+        target = os.path.join(apis.A9_PLAYGROUND_DIR, "main.py")
+        before = self.read(target)
+        response = Client().post("/2021/discussion/A9/api",
+                                 {"log_code": "print(1)", "api_code": "print(2)"})
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(self.read(target), before)
+
+    def test_a9_api_rejects_oversize_code(self):
+        target = os.path.join(apis.A9_PLAYGROUND_DIR, "main.py")
+        before = self.read(target)
+        response = self.logged_in_client().post(
+            "/2021/discussion/A9/api",
+            {"log_code": "a" * (MAX_LAB_CODE_BYTES + 1), "api_code": "print(2)"})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.read(target), before)
+
+    def test_a9_api_rejects_a_missing_field(self):
+        target = os.path.join(apis.A9_PLAYGROUND_DIR, "api.py")
+        before = self.read(target)
+        response = self.logged_in_client().post("/2021/discussion/A9/api",
+                                                {"log_code": "print(1)"})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.read(target), before)
+
+    def test_a6_api2_requires_a_session(self):
+        target = os.path.join(apis.A6_PLAYGROUND_DIR, "utility.py")
+        before = self.read(target)
+        response = Client().post("/2021/discussion/A6/api2", {"code": "print(1)"})
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(self.read(target), before)
+
+    def test_a6_api2_stores_submitted_code(self):
+        code = "def check_vuln(modules):\n    return []\n"
+        with TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "utility.py")
+            write_text_atomically(target, "# original\n")
+            with patch.object(apis, "A6_PLAYGROUND_DIR", tmp):
+                response = self.logged_in_client().post("/2021/discussion/A6/api2",
+                                                        {"code": code})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["message"], "success")
+            self.assertEqual(self.read(target), code)
+            # Replaced in place: no leftover temporary file, nothing else written.
+            self.assertEqual(os.listdir(tmp), ["utility.py"])
+
+    def test_a6_api2_rejects_oversize_code(self):
+        with TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "utility.py")
+            write_text_atomically(target, "# original\n")
+            with patch.object(apis, "A6_PLAYGROUND_DIR", tmp):
+                response = self.logged_in_client().post(
+                    "/2021/discussion/A6/api2",
+                    {"code": "a" * (MAX_LAB_CODE_BYTES + 1)})
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(self.read(target), "# original\n")
+            self.assertEqual(os.listdir(tmp), ["utility.py"])
+
+    def test_a6_api2_still_accepts_the_fetch_callers_csrf_token(self):
+        """The a6.js flow (session cookie + X-CSRFToken header) keeps working."""
+        client = self.logged_in_client(enforce_csrf_checks=True)
+        page = client.get("/2021/discussion/A6")
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, "csrfmiddlewaretoken")
+        token = page.cookies["csrftoken"].value
+        with TemporaryDirectory() as tmp:
+            write_text_atomically(os.path.join(tmp, "utility.py"), "# original\n")
+            with patch.object(apis, "A6_PLAYGROUND_DIR", tmp):
+                response = client.post("/2021/discussion/A6/api2",
+                                       {"code": "print(1)\n"},
+                                       HTTP_X_CSRFTOKEN=token)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(self.read(os.path.join(tmp, "utility.py")), "print(1)\n")
+
+
+# DEBUG=False + django-heroku's manifest static storage makes {% static %} fail
+# without collectstatic, so mirror tests_platform.py and force plain storage.
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+)
+class SstiBlogWriteTests(TestCase):
+    """Regression tests for the SSTI lab blog writer (CWE-93/CWE-1336).
+
+    A blog body used to be pasted into a generated Django template file that was
+    then rendered, so posted template syntax executed on the server. The body is
+    now size capped, stripped of template syntax, stored as data in a dedicated
+    directory outside the template search path, and printed through an
+    autoescaped context variable.
+    """
+
+    PASSWORD = "Str0ng-Passw0rd!"
+    PAYLOAD = ("{{7*7}}{% load log %}{% get_admin_log 5 as log %}"
+               "<script>alert(1)</script>")
+    # Captured before the per test patch below replaces it with a temp dir.
+    REAL_BLOG_DIR = views.SSTI_BLOG_DIR
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="sstiuser",
+                                            password=self.PASSWORD)
+        self.client.force_login(self.user)
+        blog_dir = TemporaryDirectory()
+        self.addCleanup(blog_dir.cleanup)
+        self.blog_dir = blog_dir.name
+        patcher = patch.object(views, "SSTI_BLOG_DIR", self.blog_dir)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def post_blog(self, body):
+        return self.client.post("/ssti/lab", {"blog": body})
+
+    def shown_body(self, response):
+        """The text inside the blog element, so page chrome is not matched."""
+        block = response.content.decode().split('class="ssti-blog-body"')[1]
+        return block.split(">", 1)[1].split("</pre>")[0]
+
+    def test_blog_directory_is_outside_the_template_search_path(self):
+        app_dir = os.path.realpath(os.path.dirname(os.path.abspath(views.__file__)))
+        templates = os.path.join(app_dir, "templates")
+        blog_dir = os.path.realpath(self.REAL_BLOG_DIR)
+        # A stored body must never be reachable by the template loader.
+        self.assertTrue(blog_dir.startswith(app_dir + os.sep), msg=blog_dir)
+        self.assertFalse(blog_dir.startswith(templates + os.sep), msg=blog_dir)
+
+    def test_template_payload_is_stored_as_data_and_not_evaluated(self):
+        response = self.post_blog(self.PAYLOAD)
+        self.assertEqual(response.status_code, 302)
+        blog_id = response["Location"].rsplit("/", 1)[-1]
+        self.assertEqual(Blogs.objects.filter(blog_id=blog_id).count(), 1)
+
+        stored = os.listdir(self.blog_dir)
+        self.assertEqual(stored, ["%s.txt" % blog_id])
+        body = Path(self.blog_dir, stored[0]).read_text(encoding="utf-8")
+        for delimiter in ("{%", "%}", "{{", "}}"):
+            self.assertNotIn(delimiter, body)
+
+        page = self.client.get("/ssti/blog/%s" % blog_id)
+        self.assertEqual(page.status_code, 200)
+        shown = self.shown_body(page)
+        # Displayed as data: the expression was never evaluated ...
+        self.assertNotIn("49", shown)
+        self.assertNotIn("{{7*7}}", shown)
+        # ... and the markup is escaped rather than executed in the browser.
+        self.assertNotIn("<script>alert(1)</script>", page.content.decode())
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", shown)
+
+    def test_normal_blog_round_trips(self):
+        response = self.post_blog("a normal blog post")
+        self.assertEqual(response.status_code, 302)
+        blog_id = response["Location"].rsplit("/", 1)[-1]
+        stored = os.path.join(self.blog_dir, "%s.txt" % blog_id)
+        self.assertEqual(os.listdir(self.blog_dir), ["%s.txt" % blog_id])
+        self.assertTrue(os.path.realpath(stored).startswith(
+            os.path.realpath(self.blog_dir) + os.sep))
+        page = self.client.get("/ssti/blog/%s" % blog_id)
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("a normal blog post", self.shown_body(page))
+
+    def test_oversize_blog_is_rejected(self):
+        response = self.post_blog("a" * (MAX_BLOG_BODY_BYTES + 1))
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(os.listdir(self.blog_dir), [])
+        self.assertEqual(Blogs.objects.count(), 0)
+
+    def test_missing_blog_field_is_rejected(self):
+        response = self.client.post("/ssti/lab", {})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(os.listdir(self.blog_dir), [])
+        self.assertEqual(Blogs.objects.count(), 0)
+
+    def test_anonymous_caller_cannot_write_a_blog(self):
+        response = Client().post("/ssti/lab", {"blog": "x"})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(os.listdir(self.blog_dir), [])
+        self.assertEqual(Blogs.objects.count(), 0)
+
+    def test_ids_that_are_not_generated_blog_ids_are_refused(self):
+        for blog_id in ("main", "utility", "0db9c0e7093z", "0DB9C0E7093D",
+                        "0db9c0e7093", "0db9c0e7093dd", "settings"):
+            response = self.client.get("/ssti/blog/%s" % blog_id)
+            self.assertEqual(response.status_code, 404, msg=blog_id)

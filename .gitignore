@@ -12,6 +12,9 @@ bin
 #  LOG files
 *.log
 
+# Runtime data written by the labs (SSTI blog bodies posted by users)
+introduction/lab_data/
+
 # vscode
 .vscode/
 

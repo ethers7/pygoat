@@ -23,7 +23,8 @@ from django.contrib import messages
 from django.contrib.auth import authenticate, login
 from django.contrib.auth.forms import UserCreationForm
 from django.core import serializers, signing
-from django.http import HttpResponseBadRequest, JsonResponse
+from django.http import (HttpResponseBadRequest, HttpResponseNotFound,
+                         JsonResponse)
 from django.shortcuts import redirect, render
 from django.template import loader
 from PIL import Image, ImageMath
@@ -32,9 +33,12 @@ from requests.structures import CaseInsensitiveDict
 from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
-from .utility import (UnsafeExpressionError, UnsafeUrlError, customHash,
-                      fetch_url_safely, filter_blog, is_safe_host,
-                      safe_arithmetic_eval, verify_lab_password)
+from .utility import (MAX_BLOG_BODY_BYTES, SubmittedContentTooLargeError,
+                      UnsafeExpressionError, UnsafeUrlError,
+                      UnsafeWritePathError, customHash, fetch_url_safely,
+                      filter_blog, is_safe_host, resolve_inside_directory,
+                      safe_arithmetic_eval, validate_submitted_text,
+                      verify_lab_password, write_text_exclusively)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -1010,29 +1014,44 @@ def ssti(request):
     else:
         return redirect('login')
 
+# One file per blog, in a dedicated data directory that is deliberately outside
+# the template search path: a stored body is read back as data, so it can never
+# be picked up and compiled by the template loader. The directory is computed
+# here and is never derived from request data.
+SSTI_BLOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "lab_data", "ssti_blogs")
+# Blog ids are the last group of a uuid4, i.e. exactly 12 hex characters.
+_BLOG_ID_RE = re.compile(r'^[0-9a-f]{12}$')
+
+
 def ssti_lab(request):
     if request.user.is_authenticated:
         if request.method=="GET":
             users_blogs = Blogs.objects.filter(author=request.user)
             return render(request,"Lab_2021/A3_Injection/ssti_lab.html", {"blogs":users_blogs})
         elif request.method=="POST":
-            blog = request.POST["blog"]
-            id = str(uuid.uuid4()).split('-')[-1]
-
+            # The body used to be pasted into a generated Django template that
+            # was then rendered, which turned a blog post into server side
+            # template execution. It is now stored as plain data and printed
+            # through an autoescaped context variable (see ssti_view_blog), it
+            # is size capped so a caller cannot fill the disk, template syntax
+            # is stripped by filter_blog, and the file is created exclusively
+            # under a fixed directory whose resolved path is validated first.
+            try:
+                blog = validate_submitted_text(request.POST.get("blog"),
+                                               MAX_BLOG_BODY_BYTES)
+            except SubmittedContentTooLargeError as exc:
+                return HttpResponseBadRequest(str(exc))
             blog = filter_blog(blog)
-            prepend_code = "{% extends 'introduction/base.html' %}\
-                {% block content %}{% block title %}\
-                <title>SSTI-Blogs</title>\
-                {% endblock %}"
-            
-            blog = prepend_code + blog + "{% endblock %}"
+            id = str(uuid.uuid4()).split('-')[-1]
+            try:
+                os.makedirs(SSTI_BLOG_DIR, exist_ok=True)
+                filename = resolve_inside_directory(SSTI_BLOG_DIR, f"{id}.txt")
+                write_text_exclusively(filename, blog)
+            except (UnsafeWritePathError, OSError):
+                return HttpResponseBadRequest("The blog could not be saved.")
             new_blog = Blogs.objects.create(author = request.user, blog_id = id)
-            new_blog.save() 
-            dirname = os.path.dirname(__file__)
-            filename = os.path.join(dirname, f"templates/Lab_2021/A3_Injection/Blogs/{id}.html")
-            file = open(filename, "w+") 
-            file.write(blog)
-            file.close()
+            new_blog.save()
             return redirect(f'blog/{id}')
     else:
         return redirect('login')
@@ -1041,7 +1060,18 @@ def ssti_lab(request):
 def ssti_view_blog(request,blog_id):
     if request.user.is_authenticated:
         if request.method=="GET":
-            return render(request,f"Lab_2021/A3_Injection/Blogs/{blog_id}.html")
+            if not _BLOG_ID_RE.match(blog_id or ""):
+                return HttpResponseNotFound("No such blog")
+            try:
+                filename = resolve_inside_directory(SSTI_BLOG_DIR, f"{blog_id}.txt")
+                with open(filename, encoding="utf-8") as handle:
+                    blog_body = handle.read()
+            except (UnsafeWritePathError, OSError):
+                return HttpResponseNotFound("No such blog")
+            # Handed to the template as data: autoescaping prints the stored
+            # text, so neither template syntax nor HTML in it is evaluated.
+            return render(request,"Lab_2021/A3_Injection/ssti_blog.html",
+                          {"blog_id": blog_id, "blog_body": blog_body})
         elif request.method=="POST":
             return HttpResponseBadRequest()
 

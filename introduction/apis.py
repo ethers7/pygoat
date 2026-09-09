@@ -12,10 +12,21 @@ from introduction.playground.A9.main import Log
 from introduction.playground.ssrf import main
 
 from .utility import *
+from .utility import (MAX_LAB_CODE_BYTES, SubmittedContentTooLargeError,
+                      UnsafeWritePathError, resolve_inside_directory,
+                      validate_submitted_text, write_text_atomically)
 from .views import authentication_decorator
 
+# Fixed destinations for the playground code editors. They are computed from
+# this module's location, never from request data, and every write goes through
+# resolve_inside_directory() so the file stays in its own playground directory.
+PLAYGROUND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "playground")
+A6_PLAYGROUND_DIR = os.path.join(PLAYGROUND_DIR, "A6")
+A9_PLAYGROUND_DIR = os.path.join(PLAYGROUND_DIR, "A9")
 
-# steps --> 
+
+# steps -->
 # 1. covert input code to corrosponding code and write in file
 # 2. extract inputs form 2nd code 
 # 3. Run the code 
@@ -56,20 +67,32 @@ def ssrf_code_checker(request):
 # Insufficient Logging & Monitoring
 
 
-# @authentication_decorator
+# This test bench stores the code a student submits in the A9 playground, so it
+# is restricted to an authenticated session like the A9 discussion page that
+# serves it. The caller is a fetch() in a9.js, so it answers 401 as JSON the way
+# ssrf_code_checker above does instead of using views.authentication_decorator,
+# which answers with a redirect to the login page.
 def log_function_checker(request):
+    if not request.user.is_authenticated:
+        return JsonResponse({'message': 'UnAuthenticated User'}, status=401)
     if request.method == 'POST':
-        log_code = request.POST.get('log_code')
-        api_code = request.POST.get('api_code')
-        dirname = os.path.dirname(__file__)
-        log_filename = os.path.join(dirname, "playground/A9/main.py")
-        api_filename = os.path.join(dirname, "playground/A9/api.py")
-        f = open(log_filename,"w")
-        f.write(log_code)
-        f.close()
-        f = open(api_filename,"w")
-        f.write(api_code)
-        f.close()
+        # Bound the submitted code and pin both destinations to the A9
+        # playground directory before opening anything: the request can only
+        # decide the file *contents*, never the path or its size.
+        try:
+            log_code = validate_submitted_text(request.POST.get('log_code'),
+                                               MAX_LAB_CODE_BYTES)
+            api_code = validate_submitted_text(request.POST.get('api_code'),
+                                               MAX_LAB_CODE_BYTES)
+            log_filename = resolve_inside_directory(A9_PLAYGROUND_DIR, "main.py")
+            api_filename = resolve_inside_directory(A9_PLAYGROUND_DIR, "api.py")
+        except (SubmittedContentTooLargeError, UnsafeWritePathError) as exc:
+            return JsonResponse({"message": str(exc)}, status=400)
+        try:
+            write_text_atomically(log_filename, log_code)
+            write_text_atomically(api_filename, api_code)
+        except OSError:
+            return JsonResponse({"message":"could not save code"},status = 500)
         # Clearing the log file before starting the test
         f = open('test.log', 'w')
         f.write("")
@@ -128,16 +151,23 @@ def A6_disscussion_api(request):
     except Exception as e:
         return JsonResponse({"message":"failure"},status = 400)
 
+# Stores the code a student submits in the A6 playground, so - like the A6
+# discussion page that serves it - it needs an authenticated session.
 def A6_disscussion_api_2(request):
+    if not request.user.is_authenticated:
+        return JsonResponse({'message': 'UnAuthenticated User'}, status=401)
     if request.method != 'POST':
         return JsonResponse({"message":"method not allowed"},status = 405)
+    # Same guardrails as the A9 test bench: the size of the snippet is bounded
+    # and the destination is pinned to the A6 playground directory, so request
+    # data only ever decides the file contents.
     try:
-        code = request.POST.get('code')
-        dirname = os.path.dirname(__file__)
-        filename = os.path.join(dirname, "playground/A6/utility.py")
-        f = open(filename,"w")
-        f.write(code)
-        f.close()
-    except:
-        return JsonResponse({"message":"missing code"},status = 400)
+        code = validate_submitted_text(request.POST.get('code'), MAX_LAB_CODE_BYTES)
+        filename = resolve_inside_directory(A6_PLAYGROUND_DIR, "utility.py")
+    except (SubmittedContentTooLargeError, UnsafeWritePathError) as exc:
+        return JsonResponse({"message": str(exc)}, status=400)
+    try:
+        write_text_atomically(filename, code)
+    except OSError:
+        return JsonResponse({"message":"could not save code"},status = 500)
     return JsonResponse({"message":"success"},status = 200)
