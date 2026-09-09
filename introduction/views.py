@@ -17,6 +17,7 @@ import jwt
 import requests
 import yaml
 from argon2 import PasswordHasher
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import authenticate, login
 from django.contrib.auth.forms import UserCreationForm
@@ -227,7 +228,15 @@ def insec_des_lab(request):
         response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Only Admins can see this page"})
         token = request.COOKIES.get('token')
         if token == None:
-            response.set_cookie(key='token',value=dump_lab_user(TestUser()))
+            # CWE-614: the signed lab token is server state only - no script
+            # reads it, so HttpOnly + SameSite=Lax; Secure follows the deployed
+            # transport (settings.LAB_COOKIE_SECURE).
+            response.set_cookie(
+                key='token',
+                value=dump_lab_user(TestUser()),
+                httponly=True,
+                samesite='Lax',
+                secure=settings.LAB_COOKIE_SECURE)
         else:
             try:
                 admin = load_lab_user(token)
@@ -315,7 +324,14 @@ def auth_lab_signup(request):
                     request,
                     'Lab/AUTH/auth_success.html',
                     {'username': obj.username, 'userid': obj.userid, 'name': obj.name, 'err_msg': 'Cookie Set'})
-                response.set_cookie('userid', obj.userid, max_age=31449600, samesite=None, secure=False)
+                # CWE-614: the auth lab identifies the visitor with this cookie
+                # and no page script reads it, so it is HttpOnly and stays off
+                # cross-site requests (SameSite=Lax). Secure is environment
+                # driven because this lab is served over plain HTTP by default.
+                response.set_cookie(
+                    'userid', obj.userid, max_age=31449600,
+                    httponly=True, samesite='Lax',
+                    secure=settings.LAB_COOKIE_SECURE)
                 print('Setting cookie successful')
                 return response
             except:
@@ -334,7 +350,12 @@ def auth_lab_login(request):
                 request,
                 'Lab/AUTH/auth_success.html',
                 {'username': obj.username, 'userid': obj.userid, 'name': obj.name, 'err_msg': 'Login Successful'})
-            response.set_cookie('userid', obj.userid, max_age=31449600, samesite=None, secure=False)
+            # CWE-614: same attributes as the signup path - HttpOnly, Lax, and
+            # an environment driven Secure flag.
+            response.set_cookie(
+                'userid', obj.userid, max_age=31449600,
+                httponly=True, samesite='Lax',
+                secure=settings.LAB_COOKIE_SECURE)
             print('Login successful')
             return response
         except:
@@ -351,7 +372,11 @@ def auth_lab_login(request):
                     request,
                     'Lab/AUTH/auth_success.html',
                     {'username': obj.username, 'userid': obj.userid, 'name': obj.name, 'err_msg': 'Login Successful'})
-                response.set_cookie('userid', obj.userid, max_age=31449600, samesite=None, secure=False)
+                # CWE-614: same attributes as the GET login path.
+                response.set_cookie(
+                    'userid', obj.userid, max_age=31449600,
+                    httponly=True, samesite='Lax',
+                    secure=settings.LAB_COOKIE_SECURE)
                 print('Login successful')
                 return response
             except:
@@ -394,7 +419,14 @@ def ba_lab(request):
                         "data":"0NLY_F0R_4DM1N5",
                         "username": "admin"
                     })
-                html.set_cookie("admin", "1",max_age=200)
+                # CWE-614: the role marker is read back by the view only (no
+                # document.cookie access anywhere in the lab templates), so it is
+                # HttpOnly and SameSite=Lax. Secure is environment driven -
+                # see settings.LAB_COOKIE_SECURE.
+                html.set_cookie(
+                    "admin", "1", max_age=200,
+                    httponly=True, samesite='Lax',
+                    secure=settings.LAB_COOKIE_SECURE)
                 return html
             elif login.objects.filter(user=name,password=password):
                 html = render(
@@ -404,7 +436,11 @@ def ba_lab(request):
                     "not_admin":"No Secret key for this User",
                     "username": name
                 })
-                html.set_cookie("admin", "0",max_age=200)
+                # CWE-614: same attributes as the admin branch above.
+                html.set_cookie(
+                    "admin", "0", max_age=200,
+                    httponly=True, samesite='Lax',
+                    secure=settings.LAB_COOKIE_SECURE)
                 return html
             else:
                 return render(request, 'Lab/BrokenAccess/ba_lab.html', {"data": "User Not Found"})
@@ -537,13 +573,24 @@ def Otp(request):
             if email=="admin@pygoat.com":
                 otp.objects.filter(id=2).update(otp=otpN)
                 html = render(request, "Lab/BrokenAuth/otp.html", {"otp":"Sent To Admin Mail ID"})
-                html.set_cookie("email", email)
+                # CWE-614: the OTP flow reads this back from request.COOKIES on
+                # the server only, so keep it out of document.cookie (HttpOnly)
+                # and off cross-site requests (SameSite=Lax). Secure follows the
+                # deployed transport - see settings.LAB_COOKIE_SECURE.
+                html.set_cookie(
+                    "email", email,
+                    httponly=True, samesite='Lax',
+                    secure=settings.LAB_COOKIE_SECURE)
                 return html
 
             else:
                 otp.objects.filter(id=1).update(email=email, otp=otpN)
                 html=render (request,"Lab/BrokenAuth/otp.html",{"otp":otpN})
-                html.set_cookie("email",email)
+                # CWE-614: same attributes as the admin branch above.
+                html.set_cookie(
+                    "email", email,
+                    httponly=True, samesite='Lax',
+                    secure=settings.LAB_COOKIE_SECURE)
                 return html
         else:
             return render(request,"Lab/BrokenAuth/otp.html")
@@ -808,7 +855,12 @@ def a1_broken_access_lab_1(request):
                 "not_admin":"No Secret key for this User",
                 "username": name
             })
-            html.set_cookie("admin", "0",max_age=200)
+            # CWE-614: the A1 lab role marker is server read only - HttpOnly,
+            # SameSite=Lax, environment driven Secure.
+            html.set_cookie(
+                "admin", "0", max_age=200,
+                httponly=True, samesite='Lax',
+                secure=settings.LAB_COOKIE_SECURE)
             return html
         else:
             return render(request, 'Lab_2021/A1_BrokenAccessControl/broken_access_lab_1.html', {"data": "User Not Found"})
@@ -1207,12 +1259,22 @@ def crypto_failure_lab3(request):
                     expire = datetime.datetime.now() + datetime.timedelta(minutes=60)
                     cookie = f"{username}|{expire}"
                     response = render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab3.html",{"success":True, "failure":False , "admin":False})
-                    response.set_cookie("cookie", cookie)
+                    # CWE-614: session marker for the crypto lab - decoded by the
+                    # view, never by a script, so HttpOnly + SameSite=Lax, with
+                    # Secure taken from settings.LAB_COOKIE_SECURE.
+                    response.set_cookie(
+                        "cookie", cookie,
+                        httponly=True, samesite='Lax',
+                        secure=settings.LAB_COOKIE_SECURE)
                     response.status_code = 200
                     return response
                 else:
                     response = render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab3.html",{"success":False, "failure":True})
-                    response.set_cookie("cookie", None)
+                    # CWE-614: same attributes on the failure path.
+                    response.set_cookie(
+                        "cookie", None,
+                        httponly=True, samesite='Lax',
+                        secure=settings.LAB_COOKIE_SECURE)
                     return response
             except:
                 return render(request,"Lab_2021/A2_Crypto_failur/crypto_failure_lab2.html",{"success":False, "failure":True})
@@ -1240,7 +1302,14 @@ def sec_misconfig_lab3(request):
 
         cookie = jwt.encode(payload, SECRET_COOKIE_KEY, algorithm='HS256')
         response = render(request,"Lab/sec_mis/sec_mis_lab3.html", {"admin":False} )
-        response.set_cookie(key = "auth_cookie", value = cookie)
+        # CWE-614: the JWT is verified server side in this view, so no script
+        # needs it (HttpOnly) and it never travels cross-site (SameSite=Lax).
+        # Secure comes from settings.LAB_COOKIE_SECURE because the lab is served
+        # over plain HTTP unless the deployment terminates TLS.
+        response.set_cookie(
+            key="auth_cookie", value=cookie,
+            httponly=True, samesite='Lax',
+            secure=settings.LAB_COOKIE_SECURE)
         return response
 
 # - ------------------------Identification and Authentication Failures--------------------------------
@@ -1327,14 +1396,25 @@ def auth_failure_lab3(request):
             password = hashlib.sha256(password.encode()).hexdigest()
         except:
             response = render(request, "Lab_2021/A7_auth_failure/lab3.html")
-            response.set_cookie("session_id", None)
+            # CWE-614: session identifier - HttpOnly and SameSite=Lax always,
+            # Secure from settings.LAB_COOKIE_SECURE.
+            response.set_cookie(
+                "session_id", None,
+                httponly=True, samesite='Lax',
+                secure=settings.LAB_COOKIE_SECURE)
             return response
 
         if USER_A7_LAB3[username]['password'] == password:
             session_data = AF_session_id.objects.create(session_id=token, user=USER_A7_LAB3[username]['username'])
             session_data.save()
             response = render(request, "Lab_2021/A7_auth_failure/lab3.html", {"success":True, "failure":False, "username":username})
-            response.set_cookie("session_id", token)
+            # CWE-614: the issued session id is looked up in AF_session_id by
+            # the view, so it is HttpOnly and SameSite=Lax; Secure is
+            # environment driven (settings.LAB_COOKIE_SECURE).
+            response.set_cookie(
+                "session_id", token,
+                httponly=True, samesite='Lax',
+                secure=settings.LAB_COOKIE_SECURE)
             return response
 
 #-- coding playground for lab2

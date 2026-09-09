@@ -8,8 +8,10 @@ DEBUG=False, so {% static %} blows up without collectstatic (and collectstatic
 fails upstream on a missing font). Gunicorn smoke uses DEBUG=True. Tests force
 plain StaticFilesStorage so we gate routes/auth, not WhiteNoise manifests.
 """
+import ast
 import base64
 import inspect
+import os
 import pathlib
 import re
 
@@ -21,7 +23,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
-from .models import CF_user, CSRF_user_tbl
+from .models import CF_user, CSRF_user_tbl, authLogin
 from .utility import make_lab_password, safe_lookup_target
 
 
@@ -559,3 +561,142 @@ class CsrfProtectionRegressionTests(TestCase):
                 self.assertEqual(len(calls), 1, msg=method)
                 self.assertIn("cookies=csrf_cookies", calls[0])
                 self.assertIn("headers=csrf_headers", calls[0])
+
+
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+    CSRF_LAB_JWT_KEY="unit-test-csrf-lab-signing-key",
+)
+class LabCookieAttributeTests(TestCase):
+    """CWE-614: every cookie a lab view issues must carry security attributes.
+
+    HttpOnly and SameSite are unconditional at the response.set_cookie() call
+    sites. Secure cannot be hard-coded on: docker-compose.yml publishes PyGoat
+    over plain HTTP, where a browser silently drops a Secure cookie and every
+    cookie driven lab would break, so it is taken from
+    settings.LAB_COOKIE_SECURE (default off, switched on for HTTPS
+    deployments). Django's own csrftoken cookie is deliberately left readable by
+    static/js/csrf.js and is not covered by these assertions.
+    """
+
+    PASSWORD = "Str0ng-Passw0rd!"
+    LAB_USERNAME = "cookielabuser"
+    APP_DIR = pathlib.Path(__file__).resolve().parent
+    COOKIE_MODULES = ("views.py", "mitre.py")
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="cookiegateuser",
+            email="cookiegateuser@example.com",
+            password=self.PASSWORD,
+        )
+        self.client.force_login(self.user)
+
+    def _set_cookie_calls(self, module_name):
+        """Every response.set_cookie() call in a lab module, as AST nodes."""
+        source = (self.APP_DIR / module_name).read_text(encoding="utf-8")
+        return [
+            node for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "set_cookie"
+        ]
+
+    def _assert_attributes(self, response, name, secure=False):
+        self.assertIn(name, response.cookies)
+        morsel = response.cookies[name]
+        self.assertTrue(morsel["httponly"], msg=name)
+        self.assertEqual(morsel["samesite"], "Lax", msg=name)
+        self.assertEqual(bool(morsel["secure"]), secure, msg=name)
+        return morsel
+
+    def test_every_lab_set_cookie_call_passes_the_attributes(self):
+        """A new call site cannot forget the flags without failing here."""
+        calls = 0
+        for module_name in self.COOKIE_MODULES:
+            for call in self._set_cookie_calls(module_name):
+                calls += 1
+                keywords = {kw.arg: kw.value for kw in call.keywords}
+                where = "%s:%d" % (module_name, call.lineno)
+                with self.subTest(call=where):
+                    self.assertEqual(
+                        {"httponly", "samesite", "secure"} - set(keywords),
+                        set(),
+                        msg="set_cookie at %s omits security attributes" % where,
+                    )
+                    httponly = keywords["httponly"]
+                    self.assertIsInstance(httponly, ast.Constant, msg=where)
+                    self.assertIs(httponly.value, True, msg=where)
+                    samesite = keywords["samesite"]
+                    self.assertIsInstance(samesite, ast.Constant, msg=where)
+                    self.assertIn(samesite.value, ("Lax", "Strict"), msg=where)
+                    # Secure must stay environment driven, never a literal.
+                    secure = keywords["secure"]
+                    self.assertIsInstance(secure, ast.Attribute, msg=where)
+                    self.assertEqual(secure.attr, "LAB_COOKIE_SECURE", msg=where)
+        self.assertGreater(calls, 0, msg="no set_cookie calls found to gate")
+
+    def test_lab_cookie_secure_setting_comes_from_the_environment(self):
+        expected = os.environ.get("LAB_COOKIE_SECURE", "false").strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+        self.assertIs(settings.LAB_COOKIE_SECURE, expected)
+
+    def test_insecure_deserialization_lab_token_cookie(self):
+        r = self.client.get(reverse("insec_des_lab"))
+        self.assertEqual(r.status_code, 200)
+        morsel = self._assert_attributes(r, "token")
+        # The signed-token control from the CWE-502 fix still stands.
+        self.assertEqual(signing.loads(morsel.value), {"admin": 0})
+
+    def test_auth_lab_signup_userid_cookie(self):
+        r = self.client.post(
+            reverse("auth_lab_signup"),
+            {"name": "Cookie Lab", "username": self.LAB_USERNAME, "pass": self.PASSWORD},
+        )
+        self.assertEqual(r.status_code, 200)
+        stored = authLogin.objects.get(username=self.LAB_USERNAME)
+        morsel = self._assert_attributes(r, "userid")
+        self.assertEqual(morsel.value, str(stored.userid))
+
+    def test_security_misconfiguration_lab3_auth_cookie(self):
+        r = self.client.get("/sec_mis_lab3")
+        self.assertEqual(r.status_code, 200)
+        self._assert_attributes(r, "auth_cookie")
+
+    def test_auth_failure_lab3_session_cookie(self):
+        r = self.client.post(reverse("auth_failure_lab3"), {})
+        self.assertEqual(r.status_code, 200)
+        self._assert_attributes(r, "session_id")
+
+    def test_csrf_lab_auth_cookie(self):
+        CSRF_user_tbl.objects.create(
+            username=self.LAB_USERNAME,
+            password=make_lab_password(self.PASSWORD),
+            balance=100,
+        )
+        r = self.client.post(
+            reverse("csrf_lab_login"),
+            {"username": self.LAB_USERNAME, "password": self.PASSWORD},
+        )
+        self.assertEqual(r.status_code, 302)
+        morsel = self._assert_attributes(r, "auth_cookiee")
+        # The runtime signing key from the CWE-522 fix still stands.
+        payload = jwt.decode(
+            morsel.value, settings.CSRF_LAB_JWT_KEY, algorithms=["HS256"]
+        )
+        self.assertEqual(payload["username"], self.LAB_USERNAME)
+
+    def test_secure_attribute_switches_on_for_https_deployments(self):
+        with override_settings(LAB_COOKIE_SECURE=True):
+            r = self.client.get(reverse("insec_des_lab"))
+            self.assertEqual(r.status_code, 200)
+            self._assert_attributes(r, "token", secure=True)
+
+    def test_csrf_token_cookie_stays_readable_by_the_csrf_helper(self):
+        """csrf.js falls back to document.cookie, so csrftoken is not HttpOnly."""
+        self.assertFalse(getattr(settings, "CSRF_COOKIE_HTTPONLY", False))
+        helper = (self.APP_DIR / "static" / "js" / "csrf.js").read_text(encoding="utf-8")
+        self.assertIn("document.cookie", helper)
+        self.assertIn("csrftoken=", helper)

@@ -175,7 +175,15 @@ def csrf_lab_login(request):
             # supplied) - never a literal in this module.
             cookie = jwt.encode(payload, settings.CSRF_LAB_JWT_KEY, algorithm='HS256')
             response = redirect("/mitre/9/lab/transaction")
-            response.set_cookie('auth_cookiee', cookie)
+            # CWE-614: this JWT is the lab session. It is decoded server side in
+            # csrf_transfer_monei/_api, so no script needs it (HttpOnly) and it
+            # must not ride along on cross-site requests (SameSite=Lax). Secure
+            # follows settings.LAB_COOKIE_SECURE: docker-compose serves PyGoat
+            # over plain HTTP, where a browser would drop a Secure cookie.
+            response.set_cookie(
+                'auth_cookiee', cookie,
+                httponly=True, samesite='Lax',
+                secure=settings.LAB_COOKIE_SECURE)
             return response
         else :
             return redirect('/mitre/9/lab/login')
