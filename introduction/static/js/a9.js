@@ -1,5 +1,17 @@
 // console.log("imported a9.js");
 
+// Resolve the CSRF token at runtime (hidden form field first, then the
+// csrftoken cookie Django sets). Session/CSRF credentials must never be
+// hard-coded into static JavaScript served to every visitor.
+function getCsrfToken(){
+    var field = document.querySelector('input[name="csrfmiddlewaretoken"]');
+    if (field){
+        return field.value;
+    }
+    var match = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]*)/);
+    return match ? decodeURIComponent(match[1]) : "";
+}
+
 event1 = function(){
     document.getElementById("a9_b1").style.display = 'none';
     document.getElementById("a9_d1").style.display = 'flex';
@@ -14,11 +26,12 @@ event3 = function(){
     var log_code = document.getElementById('a9_log').value
     var target_code = document.getElementById('a9_api').value
 
+    // The browser attaches this origin's session and CSRF cookies to the
+    // same-origin request below, so no Cookie/jwt header is set here.
     var myHeaders = new Headers();
-    myHeaders.append("Cookie", "csrftoken=5fVOTXh2HNahtvJFJNRSrKkwPAgPM9YCHlrCGprAxhAAKOUWMxqMnWm8BUomv0Yd; jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MSwiZXhwIjoxNjUzMzEzMDIxLCJpYXQiOjE2NTMzMDk0MjF9.dh2gfP9wKD8GKu1J-jVs2jJUYMgKu_kMaJjrD0hHP-I");
 
     var formdata = new FormData();
-    formdata.append("csrfmiddlewaretoken", "5fVOTXh2HNahtvJFJNRSrKkwPAgPM9YCHlrCGprAxhAAKOUWMxqMnWm8BUomv0Yd");
+    formdata.append("csrfmiddlewaretoken", getCsrfToken());
     formdata.append("log_code", log_code);
     formdata.append("api_code", target_code);
 
@@ -26,6 +39,7 @@ event3 = function(){
     method: 'POST',
     headers: myHeaders,
     body: formdata,
+    credentials: 'same-origin',
     redirect: 'follow'
     };
 
