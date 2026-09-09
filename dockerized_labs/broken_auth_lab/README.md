@@ -10,7 +10,6 @@ This is a deliberately vulnerable web application that demonstrates common authe
 4. Vulnerable "Remember Me" Functionality
 5. Predictable Password Reset Tokens
 6. No Brute Force Protection
-7. Debug Mode Enabled in Production
 
 ## Setup Instructions
 
@@ -30,6 +29,16 @@ This is a deliberately vulnerable web application that demonstrates common authe
    (browsers treat `localhost` as a trustworthy origin, so the `Secure` session
    cookie works over plain HTTP on this address; reach the lab through
    `localhost`, not a LAN IP)
+
+> **Note on how the app is served:** the container runs the app through
+> `gunicorn --bind 0.0.0.0:5000 --workers 2 app:app` as the unprivileged
+> `appuser`, and the Flask/Werkzeug debugger is disabled. The debugger used to
+> be enabled here, which leaked source code and configuration in tracebacks and
+> exposed an interactive console that could run arbitrary code inside the
+> container -- neither of which is an authentication lesson. If you prefer to run
+> the lab without Docker, `python app.py` still starts Flask's development
+> server on port 5000, also without debug mode. All the authentication
+> weaknesses below behave exactly the same under either entrypoint.
 
 ### Default Credentials
 

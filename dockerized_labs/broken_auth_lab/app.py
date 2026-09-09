@@ -208,4 +208,12 @@ def logout():
     return response
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)  # Vulnerable: Debug mode enabled in production 
+    # Local development entrypoint only (CWE-489). Debug mode is never enabled:
+    # the Werkzeug debugger renders tracebacks with source, locals and config
+    # into HTTP responses and exposes an interactive console that allows
+    # arbitrary code execution. It is not made configurable either, so it cannot
+    # be switched back on by an environment variable or request input.
+    # The shipped container does not use this server at all -- it serves the app
+    # with gunicorn ("app:app", see Dockerfile), which is the production WSGI
+    # entrypoint on the same port 5000.
+    app.run(host='0.0.0.0', port=5000) 

@@ -4,4 +4,7 @@ itsdangerous==2.1.2
 click==8.1.7
 blinker==1.6.2
 Jinja2==3.1.2
-MarkupSafe==2.1.3 
+MarkupSafe==2.1.3
+# Production WSGI server used as the container CMD instead of Flask's built-in
+# development server (same pin as the top-level PyGoat requirements.txt).
+gunicorn==23.0.0 
