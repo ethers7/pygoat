@@ -36,6 +36,10 @@ docker-compose up --build
 
 2. Access the lab at http://localhost:8080
 
+   (the session cookie that carries the CSRF token is issued with `Secure`,
+   `HttpOnly` and `SameSite=Lax`; browsers treat `localhost` as a trustworthy
+   origin, so reach the lab through `localhost`, not a LAN IP)
+
 ### Manual Setup
 
 1. Create a virtual environment:
@@ -97,6 +101,7 @@ The lab feature is unchanged &mdash; `/serialize` still issues a token and `/des
 - `/deserialize` calls `URLSafeSerializer.loads()`, which verifies the signature before the payload is parsed, then rebuilds `User` from validated JSON primitives (`str` username, `bool` is_admin). There is no pickle fallback.
 - The `__reduce__` gadget was removed from `User`.
 - The signing key is read from the `LAB_SECRET_KEY` environment variable; when unset, a random per-process key is generated (no secret is committed).
+- Both forms post a hidden `csrf_token` field that is bound to the session cookie, and unsafe requests without a matching token are rejected with `400` (CWE-352). CSRF is not the weakness this lab teaches, so the exercise is unchanged; when replaying `/serialize` or `/deserialize` with curl or a script, send the session cookie plus the `csrf_token` value from the form (or the `X-CSRFToken` header).
 
 Tampering with the payload now yields a signature error, which is exactly the behaviour the lab is meant to teach.
 

@@ -46,6 +46,15 @@ The lab comes with two pre-configured users:
 
 ## Lab Exercises
 
+> **Note on CSRF:** every form in this lab posts a hidden `csrf_token` field that
+> is bound to the framework session cookie (`lab_framework_session`), and the app
+> answers `400` to any POST that does not present a matching token. Cross-site
+> request forgery is not one of the weaknesses this lab teaches, so the exercises
+> below are unaffected. If you replay a request with curl, Burp or a script, send
+> the `lab_framework_session` cookie together with the `csrf_token` value taken
+> from the form (or pass it as the `X-CSRFToken` header). The deliberately weak
+> base64 `session` cookie is a separate cookie and is still yours to attack.
+
 1. **Password Policy Bypass**
    - Try to create accounts with weak passwords
    - Observe the lack of password requirements

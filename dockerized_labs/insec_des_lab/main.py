@@ -1,8 +1,9 @@
+import hmac
 import os
 import secrets
 from dataclasses import asdict, dataclass
 
-from flask import Flask, render_template, request
+from flask import Flask, abort, render_template, request, session
 from itsdangerous import BadData, URLSafeSerializer
 
 app = Flask(__name__)
@@ -10,6 +11,55 @@ app = Flask(__name__)
 # random per-process key so the lab still runs locally without shipping a
 # hard-coded secret in the repository.
 app.secret_key = os.environ.get('LAB_SECRET_KEY') or secrets.token_urlsafe(32)
+
+# The session cookie carries the CSRF token below, so keep it out of reach of
+# JavaScript and off cross-site requests. The lab is reached at
+# http://localhost:8080 and browsers treat localhost as a trustworthy origin, so
+# a Secure cookie keeps working without terminating TLS.
+app.config['SESSION_COOKIE_SECURE'] = True
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+
+# --- CSRF protection (CWE-352) ---------------------------------------------
+# The forms in templates/index.html change server state over POST and used to
+# carry no CSRF token, so any site could submit them on a visitor's behalf.
+# {% csrf_token %} is a Django tag and does not exist in Jinja2, so this is the
+# equivalent control for a Flask app: a per-session random token that is
+# rendered into every form and compared in constant time on unsafe requests.
+# It is implemented with the standard library instead of Flask-WTF to avoid
+# adding a dependency to this single-file lab.
+CSRF_FIELD_NAME = 'csrf_token'
+CSRF_SESSION_KEY = '_csrf_token'
+CSRF_SAFE_METHODS = frozenset({'GET', 'HEAD', 'OPTIONS', 'TRACE'})
+
+
+def csrf_token():
+    """Return this session's CSRF token, creating it on first use."""
+    token = session.get(CSRF_SESSION_KEY)
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session[CSRF_SESSION_KEY] = token
+    return token
+
+
+# Exposed to Jinja2 so templates can render {{ csrf_token() }}.
+app.jinja_env.globals['csrf_token'] = csrf_token
+
+
+@app.before_request
+def verify_csrf_token():
+    """Reject state changing requests that do not present the session token."""
+    if request.method in CSRF_SAFE_METHODS:
+        return None
+    expected = session.get(CSRF_SESSION_KEY)
+    submitted = (request.form.get(CSRF_FIELD_NAME)
+                 or request.headers.get('X-CSRFToken', ''))
+    # Compare as bytes: compare_digest rejects non-ASCII str input, and the
+    # submitted value is attacker controlled.
+    if not expected or not hmac.compare_digest(expected.encode('utf-8'),
+                                               submitted.encode('utf-8')):
+        abort(400, 'CSRF token missing or invalid')
+    return None
 
 # Tokens are signed JSON documents: only primitive JSON types cross the trust
 # boundary, and the signature proves the payload was produced by this app.

@@ -52,6 +52,8 @@
 
         <div style="text-align: right; margin-top: 20px;">
             <form action="{{ url_for('logout') }}" method="post" style="display: inline;">
+                {# CSRF protection (CWE-352): per-session token checked in app.py. #}
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit">Logout</button>
             </form>
         </div>

@@ -122,25 +122,32 @@ def ssrf_lab(request):
                 </div>
                 <div id="textarea2">
                     <h6>ssrf_lab.html</h6>
+                    {% comment %}
+                    The sample below mirrors the real ssrf_lab.html, so every POST form in it
+                    carries a csrf_token tag (CWE-352). Each tag is wrapped in a verbatim block
+                    so it is printed to the student as literal lesson text instead of being
+                    rendered here. It used to be written with &#37; HTML entities, which showed
+                    the same text but left no real csrf_token tag in this template's source.
+                    {% endcomment %}
                     <textarea id="html">
 <div style="display:flex;flex-direction:row;align-items:center;margin:15px">
     <form method="post" action="/ssrf_lab">
-        {&#37; csrf_token &#37;}
+        {% verbatim %}{% csrf_token %}{% endverbatim %}
         <input type="hidden" name="blog" value="templates/Lab/ssrf/blogs/blog1.txt">
         <button type="submit" class="btn btn-info"> Blog1 </button>
     </form>
     <form method="post" action="/ssrf_lab">
-        {&#37; csrf_token &#37;}
+        {% verbatim %}{% csrf_token %}{% endverbatim %}
         <input type="hidden" name="blog" value="templates/Lab/ssrf/blogs/blog2.txt">
         <button type="submit" class="btn btn-info"> Blog2 </button>
     </form>
     <form method="post" action="/ssrf_lab">
-        {&#37; csrf_token &#37;}
+        {% verbatim %}{% csrf_token %}{% endverbatim %}
         <input type="hidden" name="blog" value="templates/Lab/ssrf/blogs/blog3.txt">
         <button type="submit" class="btn btn-info"> Blog3 </button>
     </form>
     <form method="post" action="/ssrf_lab">
-        {&#37; csrf_token &#37;}
+        {% verbatim %}{% csrf_token %}{% endverbatim %}
         <input type="hidden" name="blog" value="templates/Lab/ssrf/blogs/blog4.txt">
         <button type="submit" class="btn btn-info"> Blog4 </button>
     </form>

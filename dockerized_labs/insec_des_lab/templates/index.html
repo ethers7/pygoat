@@ -63,6 +63,8 @@
         <div class="section">
             <h2>Create User</h2>
             <form action="/serialize" method="POST">
+                {# CSRF protection (CWE-352): per-session token checked in main.py. #}
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="text" name="username" placeholder="Enter username" required>
                 <button type="submit">Create User</button>
             </form>
@@ -71,6 +73,8 @@
         <div class="section">
             <h2>View Admin Content</h2>
             <form action="/deserialize" method="POST">
+                {# CSRF protection (CWE-352): per-session token checked in main.py. #}
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <textarea name="serialized_data" placeholder="Enter your signed token" required></textarea>
                 <button type="submit">View Content</button>
             </form>

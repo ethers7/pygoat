@@ -1,3 +1,6 @@
+import re
+from pathlib import Path
+
 from django.contrib.auth.hashers import is_password_usable
 from django.contrib.auth.models import User
 from django.test import Client, SimpleTestCase, TestCase, override_settings
@@ -359,6 +362,78 @@ class CsrfProtectionTests(TestCase):
                                HTTP_X_CSRFTOKEN=token)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["result"], 49)
+
+
+class TemplateCsrfTokenTests(SimpleTestCase):
+    """Every hand written POST form must carry ``{% csrf_token %}`` (CWE-352).
+
+    Django only injects the hidden ``csrfmiddlewaretoken`` input where the tag
+    is present, so a POST form without it is rejected by
+    ``CsrfViewMiddleware``. Writing the tag with HTML entities
+    (``{&#37; csrf_token &#37;}``) looks right in a browser but leaves no tag in
+    the template, which is how these forms regressed before; this scan compares
+    the template source, so that spelling fails again.
+    """
+
+    TEMPLATE_ROOT = Path(__file__).resolve().parent / "templates"
+    FORM_RE = re.compile(r"<form\b[^>]*>.*?</form>", re.DOTALL | re.IGNORECASE)
+    POST_METHOD_RE = re.compile(r"""method\s*=\s*["']?post""", re.IGNORECASE)
+    CSRF_TAG_RE = re.compile(r"{%\s*csrf_token\s*%}")
+
+    def test_every_post_form_declares_a_csrf_token(self):
+        missing = []
+        for template in sorted(self.TEMPLATE_ROOT.rglob("*.html")):
+            source = template.read_text(encoding="utf-8")
+            for form in self.FORM_RE.finditer(source):
+                block = form.group(0)
+                if not self.POST_METHOD_RE.search(block):
+                    continue
+                if self.CSRF_TAG_RE.search(block):
+                    continue
+                line = source.count("\n", 0, form.start()) + 1
+                missing.append(
+                    f"{template.relative_to(self.TEMPLATE_ROOT)}:{line}")
+        self.assertEqual(
+            missing, [],
+            msg="POST forms without a csrf_token tag: " + ", ".join(missing))
+
+
+# DEBUG=False + django-heroku's manifest static storage makes {% static %} fail
+# without collectstatic, so mirror tests_platform.py and force plain storage.
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+)
+class SsrfDiscussionSampleCodeTests(TestCase):
+    """The SSRF discussion page teaches the fixed ``ssrf_lab.html`` markup.
+
+    Its four sample forms hold ``{% csrf_token %}`` inside ``{% verbatim %}``
+    blocks, so the tag reaches the student as literal lesson text instead of
+    being rendered into the textarea. These assertions pin both halves of that:
+    the text is shown verbatim, and no real token is expanded inside the sample.
+    """
+
+    PASSWORD = "Str0ng-Passw0rd!"
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="ssrfuser",
+                                            password=self.PASSWORD)
+        self.client.force_login(self.user)
+
+    def test_sample_forms_show_the_csrf_tag_as_text(self):
+        response = self.client.get("/ssrf_discussion")
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        # One literal tag per sample form, printed rather than rendered.
+        self.assertEqual(body.count("{% csrf_token %}"), 4)
+        self.assertNotIn("{&#37; csrf_token &#37;}", body)
+
+    def test_sample_textarea_holds_no_expanded_token(self):
+        response = self.client.get("/ssrf_discussion")
+        body = response.content.decode()
+        textarea = body.split('<textarea id="html">')[1].split("</textarea>")[0]
+        self.assertIn("{% csrf_token %}", textarea)
+        self.assertNotIn("csrfmiddlewaretoken", textarea)
 
 
 # DEBUG=False + django-heroku's manifest static storage makes {% static %} fail
