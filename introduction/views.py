@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 import os
-import pickle
 import random
 import re
 import string
@@ -25,7 +24,7 @@ from argon2 import PasswordHasher
 from django.contrib import messages
 from django.contrib.auth import authenticate, login
 from django.contrib.auth.forms import UserCreationForm
-from django.core import serializers
+from django.core import serializers, signing
 from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
 from django.template import loader
@@ -202,22 +201,48 @@ def insec_des(request):
 @dataclass
 class TestUser:
     admin: int = 0
-pickled_user = pickle.dumps(TestUser())
-encoded_user = base64.b64encode(pickled_user)
+
+
+# The token cookie is a signed JSON document (django.core.signing) instead of a
+# pickle blob: the value round-trips through the client without ever
+# deserializing attacker-controlled objects, and tampering invalidates it.
+TOKEN_SALT = "introduction.insec_des_lab.token"
+TOKEN_MAX_AGE = 3600
+
+
+def issue_user_token(user=None):
+    """Serialize the lab user state as a signed JSON token."""
+    user = user if user is not None else TestUser()
+    return signing.dumps({"admin": user.admin}, salt=TOKEN_SALT)
+
+
+def read_user_token(token):
+    """Load a signed JSON token.
+
+    Returns a TestUser, or None when the token is missing, expired or was
+    tampered with. No arbitrary object is ever reconstructed from the cookie.
+    """
+    if not token:
+        return None
+    try:
+        data = signing.loads(token, salt=TOKEN_SALT, max_age=TOKEN_MAX_AGE)
+    except signing.BadSignature:
+        return None
+    if not isinstance(data, dict):
+        return None
+    return TestUser(admin=1 if data.get("admin") == 1 else 0)
+
 
 def insec_des_lab(request):
     if request.user.is_authenticated:
         response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Only Admins can see this page"})
-        token = request.COOKIES.get('token')
-        if token == None:
-            token = encoded_user
-            response.set_cookie(key='token',value=token.decode('utf-8'))
-        else:
-            token = base64.b64decode(token)
-            admin = pickle.loads(token)
-            if admin.admin == 1:
-                response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Welcome Admin, SECRETKEY:ADMIN123"})
-                return response
+        user = read_user_token(request.COOKIES.get('token'))
+        if user is None:
+            # No token yet, or the cookie was tampered with / expired: hand out
+            # a fresh non-admin token.
+            response.set_cookie(key='token',value=issue_user_token())
+        elif user.admin == 1:
+            response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Welcome Admin, SECRETKEY:ADMIN123"})
 
         return response
     else:
@@ -566,7 +591,9 @@ def a9_lab(request):
             try :
                 file=request.FILES["file"]
                 try :
-                    data = yaml.load(file,yaml.Loader)
+                    # safe_load only builds plain Python data (no arbitrary
+                    # object/tag construction) from the uploaded document.
+                    data = yaml.safe_load(file)
                     
                     return render(request,"Lab/A9/a9_lab.html",{"data":data})
                 except:

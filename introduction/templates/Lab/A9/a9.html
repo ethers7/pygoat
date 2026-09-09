@@ -35,6 +35,9 @@
             </code>
                 <li> On Uploading this file the user should be able to see the output of the command executed in the
                     Terminal running Django.</li>
+                <li>Note: this lab has been remediated. The converter now parses the upload with
+                    <code>yaml.safe_load</code>, which only builds plain data (no <code>!!python/object/apply</code>
+                    tags), so the payload above is rejected instead of executed.</li>
 
             </ul>
 
