@@ -4,7 +4,7 @@ from django.test import Client, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
 from . import apis, mitre, views
-from .models import CF_user, CSRF_user_tbl, comments
+from .models import CF_user, CSRF_user_tbl, authLogin, comments
 from .playground.A9.api import log_function_target
 from .utility import (UnsafeExpressionError, UnsafeUrlError,
                       hash_lab_password, safe_arithmetic_eval,
@@ -359,3 +359,66 @@ class CsrfProtectionTests(TestCase):
                                HTTP_X_CSRFTOKEN=token)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["result"], 49)
+
+
+# DEBUG=False + django-heroku's manifest static storage makes {% static %} fail
+# without collectstatic, so mirror tests_platform.py and force plain storage.
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+)
+class AuthLabResponseEscapingTests(TestCase):
+    """Regression tests for the broken auth lab responses (CWE-79).
+
+    Signup, login and logout used to build the page with ``render_to_string``
+    and hand the finished markup to ``HttpResponse``, bypassing Django's XSS
+    defences. They now return the autoescaping template response itself, so an
+    attacker controlled name/username is echoed as inert text and template
+    syntax is never evaluated server side.
+    """
+
+    SCRIPT_PAYLOAD = "<script>alert(1)</script>"
+    ESCAPED_SCRIPT = "&lt;script&gt;alert(1)&lt;/script&gt;"
+    TEMPLATE_PAYLOAD = "{{7*7}}"
+    PASSWORD = "L4b-P@ssw0rd!"
+
+    def assertPayloadIsInert(self, response):
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        # Escaped, so the browser never sees an executable script element.
+        self.assertNotIn(self.SCRIPT_PAYLOAD, body)
+        self.assertIn(self.ESCAPED_SCRIPT, body)
+        # Rendered as data, not as template source: no server side evaluation.
+        self.assertIn(self.TEMPLATE_PAYLOAD, body)
+        self.assertNotIn("49", body)
+
+    def signup(self):
+        return self.client.post(reverse("auth_lab_signup"),
+                                {"name": self.SCRIPT_PAYLOAD,
+                                 "username": self.TEMPLATE_PAYLOAD,
+                                 "pass": self.PASSWORD})
+
+    def test_signup_escapes_attacker_controlled_fields(self):
+        response = self.signup()
+        self.assertPayloadIsInert(response)
+        self.assertIn("userid", response.cookies)
+
+    def test_login_by_cookie_escapes_stored_fields(self):
+        self.signup()
+        obj = authLogin.objects.get(username=self.TEMPLATE_PAYLOAD)
+        self.client.cookies["userid"] = obj.userid
+        self.assertPayloadIsInert(self.client.get(reverse("auth_lab_login")))
+
+    def test_login_by_credentials_escapes_stored_fields(self):
+        self.signup()
+        response = self.client.post(reverse("auth_lab_login"),
+                                    {"username": self.TEMPLATE_PAYLOAD,
+                                     "pass": self.PASSWORD})
+        self.assertPayloadIsInert(response)
+
+    def test_logout_renders_template_and_clears_cookie(self):
+        self.signup()
+        response = self.client.get(reverse("auth_lab_logout"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Logout successful")
+        self.assertEqual(response.cookies["userid"].value, "")
