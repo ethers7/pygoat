@@ -35,8 +35,9 @@ from requests.structures import CaseInsensitiveDict
 from .forms import NewUserForm
 from .models import (FAANG, AF_admin, AF_session_id, Blogs, CF_user, authLogin,
                      comments, info, login, otp, sql_lab_table, tickits)
-from .utility import (UnsafeUrlError, customHash, fetch_url_safely,
-                      filter_blog, is_safe_host)
+from .utility import (UnsafeExpressionError, UnsafeUrlError, customHash,
+                      fetch_url_safely, filter_blog, is_safe_host,
+                      safe_arithmetic_eval)
 
 #*****************************************Lab Requirements****************************************************#
 
@@ -490,14 +491,14 @@ def cmd_lab2(request):
     if request.user.is_authenticated:
         if (request.method=="POST"):
             val=request.POST.get('val')
-            
-            print(val)
+
+            # The calculator still evaluates arithmetic, but through an AST
+            # allowlist instead of eval(), so the submitted text can never be
+            # executed as Python code (CWE-94/CWE-95).
             try:
-                output = eval(val)
-            except:
-                output = "Something went wrong"
-                return render(request,'Lab/CMD/cmd_lab2.html',{"output":output})
-            print("Output = ", output)
+                output = safe_arithmetic_eval(val)
+            except UnsafeExpressionError as error:
+                output = str(error)
             return render(request,'Lab/CMD/cmd_lab2.html',{"output":output})
         else:
             return render(request, 'Lab/CMD/cmd_lab2.html')

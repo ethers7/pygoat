@@ -102,6 +102,14 @@
                 <br><br>
                 Now, if we submit <code>os.system("id")</code>, we get nothing in the output. But if we check the terminal, we will see that the command gets executed and the result is printed on the terminal screen. You can also verify this by submitting <code>os.system("sleep 30")</code>, and you will notice that the request completes after 30 seconds.</code>
                 <br><br>
+            <b>Remediation (applied in this lab):</b><br>
+                The backend no longer calls <code>eval()</code>. The submitted text is parsed with
+                <code>ast.parse(expression, mode='eval')</code> and the resulting tree is walked against a strict allowlist
+                of node types - numeric literals, the operators <code>+ - * / // % **</code> and unary <code>+</code>/<code>-</code>.
+                Anything else (function calls, names such as <code>os</code>, attributes, strings) is rejected with an error
+                message, so <code>os.system("id")</code> no longer executes. Restricting <code>eval()</code>'s globals is
+                <i>not</i> a valid fix here, as that is bypassable.
+                <br><br>
             </p>
 
             <br>

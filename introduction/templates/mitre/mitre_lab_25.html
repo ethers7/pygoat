@@ -34,7 +34,9 @@
                 .then(response => response.text())
                 .then(result => {
                     var data = JSON.parse(result);
-                    output.value = data.result;
+                    // The API rejects anything that is not plain arithmetic and
+                    // returns an "error" message instead of a result.
+                    output.value = data.error ? data.error : data.result;
                     console.log(result);
                 })
                 .catch(

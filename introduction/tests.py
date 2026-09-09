@@ -2,7 +2,8 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
 from .models import comments
-from .utility import UnsafeUrlError, validate_public_url
+from .utility import (UnsafeExpressionError, UnsafeUrlError,
+                      safe_arithmetic_eval, validate_public_url)
 
 # Create your tests here.
 
@@ -57,6 +58,63 @@ class ValidatePublicUrlTests(SimpleTestCase):
 
         with self.assertRaises(UnsafeUrlError):
             validate_public_url("http://metadata.example/", resolver=resolver)
+
+
+class SafeArithmeticEvalTests(SimpleTestCase):
+    """Regression tests for the eval() replacement in the code injection labs.
+
+    Covers CWE-94/CWE-95: the calculator must still compute arithmetic while
+    refusing anything that could execute code.
+    """
+
+    def assert_rejected(self, expression):
+        with self.assertRaises(UnsafeExpressionError):
+            safe_arithmetic_eval(expression)
+
+    def test_evaluates_arithmetic(self):
+        cases = {
+            "7*7": 49,
+            "1 + 1": 2,
+            "(2 + 3) * -4": -20,
+            "7 // 2": 3,
+            "7 % 4": 3,
+            "2 ** 10": 1024,
+            "1.5 * 2": 3.0,
+            "  10 / 4  ": 2.5,
+        }
+        for expression, expected in cases.items():
+            self.assertEqual(safe_arithmetic_eval(expression), expected)
+
+    def test_rejects_code_execution_payloads(self):
+        for expression in ('os.system("id")',
+                           '__import__("os").system("id")',
+                           'open("/etc/passwd").read()',
+                           '().__class__.__bases__[0].__subclasses__()',
+                           '[x for x in (1, 2)]',
+                           'print(1)',
+                           'eval("1+1")',
+                           'lambda: 1',
+                           '"a" * 3',
+                           '1 if 1 else 2',
+                           '1 == 1',
+                           'True and False'):
+            self.assert_rejected(expression)
+
+    def test_rejects_empty_and_non_string_input(self):
+        for expression in ("", "   ", None, 42):
+            self.assert_rejected(expression)
+
+    def test_rejects_malformed_expression(self):
+        for expression in ("1 +", "import os", "x = 1"):
+            self.assert_rejected(expression)
+
+    def test_rejects_denial_of_service_expressions(self):
+        for expression in ("9 ** 9 ** 9", "10 ** 1000", "9" * 250):
+            self.assert_rejected(expression)
+
+    def test_rejects_division_by_zero(self):
+        for expression in ("1/0", "1//0", "1 % 0"):
+            self.assert_rejected(expression)
 
 
 # DEBUG=False + django-heroku's manifest static storage makes {% static %} fail

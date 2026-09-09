@@ -10,7 +10,7 @@ from django.shortcuts import redirect, render
 from django.views.decorators.csrf import csrf_exempt
 
 from .models import CSRF_user_tbl
-from .utility import is_safe_host
+from .utility import UnsafeExpressionError, is_safe_host, safe_arithmetic_eval
 from .views import authentication_decorator
 
 # import os
@@ -238,7 +238,13 @@ def csrf_transfer_monei_api(request,recipent,amount):
 def mitre_lab_25_api(request):
     if request.method == "POST":
         expression = request.POST.get('expression')
-        result = eval(expression)
+        # The calculator keeps working for arithmetic, but the expression is
+        # parsed and walked against a strict AST allowlist instead of being
+        # evaluated as Python code (CWE-94/CWE-95).
+        try:
+            result = safe_arithmetic_eval(expression)
+        except UnsafeExpressionError as error:
+            return JsonResponse({'result': None, 'error': str(error)}, status=400)
         return JsonResponse({'result': result})
     else:
         return redirect('/mitre/25/lab/')
