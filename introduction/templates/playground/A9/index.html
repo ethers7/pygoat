@@ -7,6 +7,8 @@
 {% load static %}
 
 <div style="display: flex;flex-direction: column;align-items: center;">
+    {# event3() in js/a9.js posts this token back with the submitted code. #}
+    {% csrf_token %}
     <h3 style="font-size: 2rem;"> In this coding ground we will create a secure logging function </h3>
     <button id="a9_b1" class="button2 button--winona button--border-thick button--round-l button--text-upper button--size-s button--text-thick" data-text="Lets go" onclick=event1()>
         <span>Lets go</span>
@@ -55,10 +57,8 @@ class Log:
                 <h6>api.py</h6>
                 <textarea  id="a9_api" placeholder="">
 from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
 from .main import Log
 
-@csrf_exempt
 def log_function_target(request):
     L = Log(request)
     if request.method == "GET":

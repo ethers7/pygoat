@@ -37,6 +37,9 @@
       integrity="sha384-6OIrr52G08NpOFSZdxxz1xdNSndlD4vdcf/q2myIUVO0VsqaGHJsB0RaBE01VTOY"
       crossorigin="anonymous"
     ></script>
+    <!-- Shared CSRF token helper: loaded first so every inline/static script on
+         the page can attach the token Django requires on unsafe requests. -->
+    <script src="{% static 'js/csrf.js' %}"> </script>
     <script defer src="{% static 'Lab/xss.js' %}"> </script>
     <script defer src="{% static 'Lab/ssrf.js' %}"> </script>
   </head>

@@ -1,16 +1,7 @@
 // console.log("imported a9.js");
 
-// Resolve the CSRF token at runtime (hidden form field first, then the
-// csrftoken cookie Django sets). Session/CSRF credentials must never be
-// hard-coded into static JavaScript served to every visitor.
-function getCsrfToken(){
-    var field = document.querySelector('input[name="csrfmiddlewaretoken"]');
-    if (field){
-        return field.value;
-    }
-    var match = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]*)/);
-    return match ? decodeURIComponent(match[1]) : "";
-}
+// getCsrfToken()/withCsrfHeader() come from js/csrf.js, loaded by
+// introduction/base.html for every page.
 
 event1 = function(){
     document.getElementById("a9_b1").style.display = 'none';
@@ -28,7 +19,7 @@ event3 = function(){
 
     // The browser attaches this origin's session and CSRF cookies to the
     // same-origin request below, so no Cookie/jwt header is set here.
-    var myHeaders = new Headers();
+    var myHeaders = withCsrfHeader(new Headers());
 
     var formdata = new FormData();
     formdata.append("csrfmiddlewaretoken", getCsrfToken());

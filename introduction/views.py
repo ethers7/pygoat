@@ -26,7 +26,6 @@ from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
 from django.template import loader
 from django.template.loader import render_to_string
-from django.views.decorators.csrf import csrf_exempt
 from PIL import Image, ImageMath
 from requests.structures import CaseInsensitiveDict
 
@@ -260,7 +259,6 @@ def xxe_lab(request):
     else:
         return redirect('login')
 
-@csrf_exempt
 def xxe_see(request):
     if request.user.is_authenticated:
         # Get first comment or create a default one if none exist
@@ -276,7 +274,6 @@ def xxe_see(request):
         return redirect('login')
 
 
-@csrf_exempt
 def xxe_parse(request):
     # The posted document is untrusted: parse it with the defused parser so
     # external entities and entity expansion are refused (CWE-611).
@@ -356,13 +353,11 @@ def auth_lab_logout(request):
 
 #***************************************************************Broken Access Control************************************************************#
 
-@csrf_exempt
 def ba(request):
     if request.user.is_authenticated:
         return render(request,"Lab/BrokenAccess/ba.html")
     else:
         return redirect('login')
-@csrf_exempt
 def ba_lab(request):
     if request.user.is_authenticated:
         name = request.POST.get('name')
@@ -435,7 +430,6 @@ def cmd(request):
         return render(request,'Lab/CMD/cmd.html')
     else:
         return redirect('login')
-@csrf_exempt
 def cmd_lab(request):
     if request.user.is_authenticated:
         if(request.method=="POST"):
@@ -478,7 +472,6 @@ def cmd_lab(request):
     else:
         return redirect('login')
 
-@csrf_exempt
 def cmd_lab2(request):
     if request.user.is_authenticated:
         if (request.method=="POST"):
@@ -521,7 +514,6 @@ def bau_lab(request):
 def login_otp(request):
     return render(request,"Lab/BrokenAuth/otp.html")
 
-@csrf_exempt
 def Otp(request):
     if request.method=="GET":
         email=request.GET.get('email')
@@ -579,7 +571,6 @@ def a9(request):
         return render(request,"Lab/A9/a9.html")
     else:
         return redirect('login')
-@csrf_exempt
 def a9_lab(request):
     if request.user.is_authenticated:
         if request.method=="GET":
@@ -604,7 +595,6 @@ def a9_lab(request):
 def get_version(request):
       return render(request,"Lab/A9/a9_lab.html",{"version":"pyyaml v5.1"})
 
-@csrf_exempt
 def a9_lab2(request):
     if not request.user.is_authenticated:
         return redirect('login')
@@ -769,7 +759,6 @@ def insec_desgine_lab(request):
 
 ###################################################### 2021 A1: Broken Access
 
-@csrf_exempt
 def a1_broken_access(request):
     if not request.user.is_authenticated:
         return redirect('login')
@@ -777,7 +766,6 @@ def a1_broken_access(request):
     return render(request,"Lab_2021/A1_BrokenAccessControl/broken_access.html")
 
 
-@csrf_exempt
 def a1_broken_access_lab_1(request):
     if request.user.is_authenticated:
         pass
@@ -813,7 +801,6 @@ def a1_broken_access_lab_1(request):
     else:
         return render(request,'Lab_2021/A1_BrokenAccessControl/broken_access_lab_1.html',{"no_creds":True})
 
-@csrf_exempt
 def a1_broken_access_lab_2(request):
     if request.user.is_authenticated:
         pass
@@ -877,7 +864,6 @@ def a1_broken_access_lab3_secret(request):
 
 ###################################################### 2021 A3: Injection
 
-@csrf_exempt
 def injection(request):
     if not request.user.is_authenticated:
         return redirect('login')
@@ -885,7 +871,6 @@ def injection(request):
     return render(request,"Lab_2021/A3_Injection/injection.html")
 
 
-@csrf_exempt
 def injection_sql_lab(request):
     if request.user.is_authenticated:
 
@@ -1236,7 +1221,6 @@ USER_A7_LAB3 = {
 # }
 
 @authentication_decorator
-@csrf_exempt
 def auth_failure_lab3(request):
     if request.method == "GET":
         try:

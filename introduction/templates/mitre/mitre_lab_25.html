@@ -9,6 +9,8 @@
         <p style="text-align:center">Only numbers and the <code>+ - * / // % **</code> operators are
             accepted; anything else is rejected.</p>
         <div class="login" style="display: flex;justify-content: center;flex-direction: column;">
+            {# Renders the hidden csrfmiddlewaretoken calculate() sends as X-CSRFToken. #}
+            {% csrf_token %}
             <div>
                 <input type="textarea" id="input" style="width: 400px;height: 50px;">
                 <button id="btn" style="width: 100px;height: 50px;" onclick="calculate()"> Calculate </button>
@@ -22,12 +24,15 @@
         function calculate(){
             var input = document.getElementById("input").value;
             var output = document.getElementById("output");
-            var headers = new Headers();
+            // withCsrfHeader() adds the X-CSRFToken header Django requires on
+            // this same-origin POST (see js/csrf.js).
+            var headers = withCsrfHeader(new Headers());
             var formdata = new FormData();
             formdata.append("expression", input);
             var requestOption = {
                 method: "POST",
                 body: formdata,
+                credentials: "same-origin",
                 redirect: "follow",
                 headers: headers
             };

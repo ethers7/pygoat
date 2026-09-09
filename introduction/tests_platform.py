@@ -18,7 +18,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.core import signing
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase, override_settings
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
 from .models import CF_user, CSRF_user_tbl
@@ -437,3 +437,120 @@ class LabPasswordHashingTests(TestCase):
                 self.assertNotRegex(source, r"md5\(\s*password")
                 self.assertNotRegex(source, r"hashlib\.md5\(")
                 self.assertNotRegex(source, r"sha1\(\s*password")
+
+
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+)
+class CsrfProtectionRegressionTests(TestCase):
+    """CWE-352: state changing views must keep Django's CSRF protection.
+
+    Gates that no view opts out with @csrf_exempt any more, that an unsafe
+    request without a token is refused, and that the browser flows still work
+    because the templates render {% csrf_token %} and the AJAX callers send the
+    X-CSRFToken header. Django's default test client skips the CSRF checks, so a
+    second client with enforce_csrf_checks=True is used to assert the rejection.
+    """
+
+    PASSWORD = "Str0ng-Passw0rd!"
+    APP_DIR = pathlib.Path(__file__).resolve().parent
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="csrfgateuser",
+            email="csrfgateuser@example.com",
+            password=self.PASSWORD,
+        )
+        self.client.force_login(self.user)
+        # Behaves like a real browser request: no token, no service.
+        self.strict = Client(enforce_csrf_checks=True)
+        self.strict.force_login(self.user)
+
+    def _token(self, path):
+        """Token the server issued for `path`, as a browser would read it."""
+        page = self.strict.get(path)
+        self.assertEqual(page.status_code, 200, msg=path)
+        return str(page.context["csrf_token"])
+
+    def test_no_lab_module_opts_out_of_csrf_protection(self):
+        from . import apis, mitre, views
+        from .playground.A9 import api as a9_api
+
+        for module in (views, apis, mitre, a9_api):
+            with self.subTest(module=module.__name__):
+                self.assertNotIn("csrf_exempt", inspect.getsource(module))
+        archive = self.APP_DIR / "playground" / "A9" / "archive.py"
+        self.assertNotIn("csrf_exempt", archive.read_text(encoding="utf-8"))
+
+    def test_post_forms_in_templates_render_a_csrf_token(self):
+        post_form = re.compile(r"<form[^>]*method\s*=\s*[\"']?post", re.IGNORECASE)
+        for template in (self.APP_DIR / "templates").rglob("*.html"):
+            body = template.read_text(encoding="utf-8")
+            if post_form.search(body):
+                with self.subTest(template=template.name):
+                    self.assertIn("csrf_token", body)
+
+    def test_form_post_without_token_is_rejected(self):
+        r = self.strict.post("/cmd_lab2", {"val": "7*7"})
+        self.assertEqual(r.status_code, 403)
+
+    def test_form_post_with_token_still_serves_the_lab(self):
+        token = self._token("/cmd_lab2")
+        r = self.strict.post(
+            "/cmd_lab2", {"val": "7*7", "csrfmiddlewaretoken": token}
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "49")
+
+    def test_json_api_post_without_token_is_rejected(self):
+        r = self.strict.post("/mitre/25/lab/api", {"expression": "6*7"})
+        self.assertEqual(r.status_code, 403)
+
+    def test_json_api_post_with_token_still_calculates(self):
+        token = self._token("/mitre/25/lab")
+        r = self.strict.post(
+            "/mitre/25/lab/api", {"expression": "6*7", "csrfmiddlewaretoken": token}
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["result"], 42)
+
+    def test_xml_body_post_needs_the_csrf_header(self):
+        body = "<comm><text>a harmless comment</text></comm>"
+        rejected = self.strict.post("/xxe_parse", data=body, content_type="text/xml")
+        self.assertEqual(rejected.status_code, 403)
+
+        # An XML body carries no form field, so the token travels in the header
+        # (Lab/xss.js does exactly this).
+        accepted = self.strict.post(
+            "/xxe_parse",
+            data=body,
+            content_type="text/xml",
+            HTTP_X_CSRFTOKEN=self._token("/xxe_lab"),
+        )
+        self.assertEqual(accepted.status_code, 200)
+
+    def test_ajax_callers_send_the_csrf_token(self):
+        static_dir = self.APP_DIR / "static"
+        self.assertIn(
+            "getCsrfToken", (static_dir / "js" / "csrf.js").read_text(encoding="utf-8")
+        )
+        for name in ("js/a6.js", "js/a7.js", "js/a9.js", "Lab/ssrf.js", "Lab/xss.js"):
+            with self.subTest(script=name):
+                source = (static_dir / name).read_text(encoding="utf-8")
+                self.assertRegex(source, r"withCsrfHeader\(|X-CSRFToken")
+
+    def test_a9_log_checker_forwards_csrf_credentials_to_the_target(self):
+        """The lab's own probes of the (protected) target must carry the token."""
+        from . import apis
+
+        source = inspect.getsource(apis.log_function_checker)
+        for method in ('"POST"', '"PATCH"', '"DELETE"'):
+            with self.subTest(method=method):
+                calls = [
+                    line for line in source.splitlines()
+                    if "requests.request(" + method in line
+                ]
+                self.assertEqual(len(calls), 1, msg=method)
+                self.assertIn("cookies=csrf_cookies", calls[0])
+                self.assertIn("headers=csrf_headers", calls[0])

@@ -2,7 +2,9 @@ event4 = function(){
     var code = document.getElementById('a7_input').value
     // The browser attaches this origin's session and CSRF cookies to the
     // same-origin request below; never hard-code session tokens here.
-    var myHeaders = new Headers();
+    // withCsrfHeader() adds the X-CSRFToken header this POST needs now that the
+    // API is CSRF protected (see js/csrf.js).
+    var myHeaders = withCsrfHeader(new Headers());
 
     var formdata = new FormData();
     formdata.append("code", code);

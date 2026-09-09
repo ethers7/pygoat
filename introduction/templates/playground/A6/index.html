@@ -7,6 +7,8 @@
 {% load static %}
 
 <div class="container" style="display:flex;flex-direction:column;width:70%">
+{# event5()/event6() in js/a6.js send this token as X-CSRFToken. #}
+{% csrf_token %}
 <h3>Lets make a utility function for checking Vulnerable modules in the requirements.txt file.</h3><br>
 <p>There are some api for getting detailed information about the pypi modules.</p><br>
 <code>https://pypi.org/pypi/{module-name}/{module-version}/json</code><br>

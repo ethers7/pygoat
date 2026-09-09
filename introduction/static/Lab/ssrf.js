@@ -63,11 +63,15 @@ function checkcode(){
     formdata.append('python_code', python_code);
     formdata.append('html_code', html_code);
     var requestOptions = {
+        // withCsrfHeader() adds the X-CSRFToken header Django requires on this
+        // same-origin POST (see js/csrf.js).
         method: 'POST',
+        headers: withCsrfHeader(new Headers()),
         body: formdata,
+        credentials: 'same-origin',
         redirect: 'follow'
       };
-      
+
     fetch("api/ssrf", requestOptions)
     .then(response => response.text())
     .then((result) => {

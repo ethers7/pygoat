@@ -1,7 +1,6 @@
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.views.generic import View
-from django.views.decorators.csrf import csrf_exempt
 import subprocess
 from .utility import get_free_port, safe_container_id, safe_docker_image
 from .models import Challenge, UserChallenge
