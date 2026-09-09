@@ -171,10 +171,15 @@ class CommandInjectionRegressionTests(TestCase):
         from . import mitre, views
 
         sources = [inspect.getsource(views), inspect.getsource(mitre)]
-        lab_code = pathlib.Path(__file__).resolve().parent / "lab_code" / "test.py"
+        introduction_dir = pathlib.Path(__file__).resolve().parent
+        lab_code = introduction_dir / "lab_code" / "test.py"
         sources.append(lab_code.read_text(encoding="utf-8"))
+        # CWE-78: the standalone uninstaller also spawns processes.
+        uninstaller = introduction_dir.parent / "uninstaller.py"
+        sources.append(uninstaller.read_text(encoding="utf-8"))
         for source in sources:
             self.assertNotIn("shell=True", source)
+            self.assertNotIn("os.system", source)
 
 
 @override_settings(
