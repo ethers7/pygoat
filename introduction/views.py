@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 import os
-import pickle
 import random
 import re
 import string
@@ -25,7 +24,7 @@ from argon2 import PasswordHasher
 from django.contrib import messages
 from django.contrib.auth import authenticate, login
 from django.contrib.auth.forms import UserCreationForm
-from django.core import serializers
+from django.core import serializers, signing
 from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
 from django.template import loader
@@ -200,19 +199,44 @@ def insec_des(request):
 @dataclass
 class TestUser:
     admin: int = 0
-pickled_user = pickle.dumps(TestUser())
-encoded_user = base64.b64encode(pickled_user)
+
+
+def dump_lab_user(user):
+    """Serialise the lab user as signed JSON: primitive data only, no object graph."""
+    return signing.dumps({"admin": int(user.admin)})
+
+
+def load_lab_user(token):
+    """Verify the signature, then rebuild TestUser from primitive JSON fields.
+
+    JSON carries data only, so a hostile cookie can never execute code the way
+    a pickled object graph would. The signature check plus the strict type
+    constraints below also stop a client from flipping ``admin`` in its own
+    token. Raises signing.BadSignature when the token is malformed, tampered
+    with, or does not describe exactly the expected primitive field.
+    """
+    data = signing.loads(token)
+    if not isinstance(data, dict) or set(data) != {"admin"}:
+        raise signing.BadSignature("Unexpected token payload")
+    admin = data["admin"]
+    if isinstance(admin, bool) or not isinstance(admin, int):
+        raise signing.BadSignature("Unexpected token field types")
+    return TestUser(admin=admin)
+
 
 def insec_des_lab(request):
     if request.user.is_authenticated:
         response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Only Admins can see this page"})
         token = request.COOKIES.get('token')
         if token == None:
-            token = encoded_user
-            response.set_cookie(key='token',value=token.decode('utf-8'))
+            response.set_cookie(key='token',value=dump_lab_user(TestUser()))
         else:
-            token = base64.b64decode(token)
-            admin = pickle.loads(token)
+            try:
+                admin = load_lab_user(token)
+            except (signing.BadSignature, ValueError):
+                # Report the rejection without echoing the supplied token back.
+                logging.warning("Rejected invalid or tampered insec_des lab token")
+                return render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Invalid or tampered token"})
             if admin.admin == 1:
                 response = render(request,'Lab/insec_des/insec_des_lab.html', {"message":"Welcome Admin, SECRETKEY:ADMIN123"})
                 return response
@@ -563,7 +587,9 @@ def a9_lab(request):
             try :
                 file=request.FILES["file"]
                 try :
-                    data = yaml.load(file,yaml.Loader)
+                    # safe_load only builds plain Python data: no arbitrary
+                    # object/tag construction from an uploaded YAML file.
+                    data = yaml.safe_load(file)
                     
                     return render(request,"Lab/A9/a9_lab.html",{"data":data})
                 except:

@@ -25,10 +25,12 @@
 				This Lab consists of a Page that has some content only available to for the admin to see, How can we access that
 				page as admin? How is our role defined?
 			</p>
-			<p class="bp">If we check the cookie we see that it is base64 encoded, on decoding we realise it is pickle
-				serialised and we can see some attributes, can you change the attributes to make the page readable?
+			<p class="bp">If we check the cookie we see an encoded value that carries our role. A pickle serialised
+				cookie would let anyone rebuild an arbitrary object graph - and run code - just by editing those bytes.
 			</p>
-			<p class="bp">Hint: try to flip the bit of the admin from ...admin\x94K\x00... to ...admin\x94K\x00...
+			<p class="bp">This lab now issues a <em>signed JSON</em> token instead: the payload is plain data and the
+				signature is verified before it is parsed. Try tampering with the <code>token</code> cookie and see the
+				request rejected instead of granting admin.
 			</p>
 			<br>
 			<div align="right">

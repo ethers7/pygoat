@@ -8,6 +8,7 @@ DEBUG=False, so {% static %} blows up without collectstatic (and collectstatic
 fails upstream on a missing font). Gunicorn smoke uses DEBUG=True. Tests force
 plain StaticFilesStorage so we gate routes/auth, not WhiteNoise manifests.
 """
+import base64
 import inspect
 import re
 from hashlib import md5
@@ -15,6 +16,8 @@ from hashlib import md5
 import jwt
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.core import signing
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
@@ -238,3 +241,92 @@ class CsrfLabJwtKeyTests(TestCase):
         r = self.client.get("/mitre/9/lab/transaction")
         self.assertEqual(r.status_code, 302)
         self.assertIn("/mitre/9/lab/login", r["Location"])
+
+
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+)
+class InsecureDeserializationRegressionTests(TestCase):
+    """CWE-502: client-supplied state must be parsed as data, never as code.
+
+    Gates that the insecure-deserialization lab still hands out and accepts a
+    token, and that the A9 lab still converts YAML - while pickle/full-loader
+    payloads are rejected instead of constructing objects.
+    """
+
+    PASSWORD = "Str0ng-Passw0rd!"
+    # Old cookie format (base64 of a pickled dict). Fed in as-is: the view must
+    # reject it, never unpickle it.
+    LEGACY_PICKLE_COOKIE = base64.b64encode(
+        b"\x80\x04\x95\x14\x00\x00\x00\x00\x00\x00\x00}\x94\x8c\x05admin\x94K\x01s."
+    ).decode()
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="desuser",
+            email="desuser@example.com",
+            password=self.PASSWORD,
+        )
+        self.client.force_login(self.user)
+
+    def test_lab_issues_signed_json_token(self):
+        r = self.client.get("/insec_des_lab")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("token", r.cookies)
+        self.assertEqual(signing.loads(r.cookies["token"].value), {"admin": 0})
+
+    def test_token_round_trips_as_primitive_data(self):
+        from .views import TestUser, dump_lab_user, load_lab_user
+
+        self.assertEqual(load_lab_user(dump_lab_user(TestUser(admin=1))).admin, 1)
+
+    def test_signed_admin_token_still_unlocks_lab(self):
+        from .views import TestUser, dump_lab_user
+
+        self.client.cookies["token"] = dump_lab_user(TestUser(admin=1))
+        r = self.client.get("/insec_des_lab")
+        self.assertContains(r, "Welcome Admin")
+
+    def test_token_signed_with_foreign_key_is_rejected(self):
+        self.client.cookies["token"] = signing.dumps(
+            {"admin": 1}, key="some-other-key"
+        )
+        r = self.client.get("/insec_des_lab")
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Invalid or tampered token")
+        self.assertNotContains(r, "SECRETKEY:ADMIN123")
+
+    def test_legacy_pickle_cookie_is_rejected(self):
+        self.client.cookies["token"] = self.LEGACY_PICKLE_COOKIE
+        r = self.client.get("/insec_des_lab")
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Invalid or tampered token")
+        self.assertNotContains(r, "SECRETKEY:ADMIN123")
+
+    def test_yaml_lab_still_converts_plain_yaml(self):
+        upload = SimpleUploadedFile(
+            "data.yaml", b"name: pygoat\nversion: 1\n", content_type="application/x-yaml"
+        )
+        r = self.client.post("/a9_lab", {"file": upload})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "pygoat")
+
+    def test_yaml_lab_rejects_python_object_tags(self):
+        upload = SimpleUploadedFile(
+            "evil.yaml",
+            b"!!python/object/apply:subprocess.Popen\n- ls\n",
+            content_type="application/x-yaml",
+        )
+        r = self.client.post("/a9_lab", {"file": upload})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Error")
+        self.assertNotContains(r, "Popen")
+
+    def test_views_module_has_no_unsafe_deserialization(self):
+        from . import views
+
+        source = inspect.getsource(views)
+        self.assertNotIn("pickle.loads", source)
+        self.assertNotIn("pickle.dumps", source)
+        self.assertNotRegex(source, r"yaml\.load\(")
