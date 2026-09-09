@@ -1,5 +1,7 @@
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase, override_settings
+from django.urls import reverse
 
+from .models import comments
 from .utility import UnsafeUrlError, validate_public_url
 
 # Create your tests here.
@@ -55,3 +57,40 @@ class ValidatePublicUrlTests(SimpleTestCase):
 
         with self.assertRaises(UnsafeUrlError):
             validate_public_url("http://metadata.example/", resolver=resolver)
+
+
+# DEBUG=False + django-heroku's manifest static storage makes {% static %} fail
+# without collectstatic, so mirror tests_platform.py and force plain storage.
+@override_settings(
+    DEBUG=True,
+    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+)
+class XxeParseTests(TestCase):
+    """Regression tests for the XXE lab XML parser hardening (CWE-611)."""
+
+    XXE_PAYLOAD = ("<?xml version='1.0'?>"
+                   "<!DOCTYPE comm [<!ENTITY xxe SYSTEM 'file:///etc/passwd'>]>"
+                   "<comm><text>&xxe;</text></comm>")
+
+    def setUp(self):
+        comments.objects.create(id=1, name="System", comment="unchanged")
+
+    def post_xml(self, body):
+        return self.client.post(reverse("xxe_parse"), data=body, content_type="text/xml")
+
+    def test_rejects_entity_declaration(self):
+        self.assertEqual(self.post_xml(self.XXE_PAYLOAD).status_code, 400)
+        self.assertEqual(comments.objects.get(id=1).comment, "unchanged")
+
+    def test_rejects_malformed_xml(self):
+        self.assertEqual(self.post_xml("<comm><text>oops").status_code, 400)
+        self.assertEqual(comments.objects.get(id=1).comment, "unchanged")
+
+    def test_rejects_document_without_text_element(self):
+        self.assertEqual(self.post_xml("<?xml version='1.0'?><comm/>").status_code, 400)
+        self.assertEqual(comments.objects.get(id=1).comment, "unchanged")
+
+    def test_accepts_well_formed_comment(self):
+        response = self.post_xml("<?xml version='1.0'?><comm><text>hello lab</text></comm>")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(comments.objects.get(id=1).comment, "hello lab")
