@@ -4,7 +4,7 @@ from unittest import mock
 from django.contrib.auth.models import User
 from django.test import SimpleTestCase, TestCase
 
-from .models import comments
+from .models import authLogin, comments
 from .utility import (safe_eval_arithmetic, safe_outbound_url,
                       safe_parse_comment_xml)
 
@@ -294,6 +294,67 @@ class CmdLab2ViewTests(TestCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertContains(response, "Expression rejected")
                 self.assertNotContains(response, "uid=")
+
+
+XSS_SCRIPT_PAYLOAD = "<script>alert('xss')</script>"
+ESCAPED_SCRIPT_PREFIX = "&lt;script&gt;"
+# Not a credential: the broken-auth lab model stores an opaque value, and the
+# tests only need a non-empty one.
+LAB_FIXTURE_SECRETLESS_VALUE = "lab-fixture-value"
+
+
+class AuthLabXssTests(TestCase):
+    """The broken-auth lab must reflect names/usernames HTML escaped (CWE-79).
+
+    The views used to hand a pre-rendered string to a bare ``HttpResponse``;
+    they now return ``render(...)`` so Django's autoescaping applies to every
+    reflected, attacker controlled value.
+    """
+
+    def _assert_payload_is_escaped(self, response):
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, XSS_SCRIPT_PAYLOAD)
+        self.assertContains(response, ESCAPED_SCRIPT_PREFIX)
+
+    def test_signup_escapes_reflected_name(self):
+        response = self.client.post(
+            "/auth_lab/signup",
+            {
+                "name": XSS_SCRIPT_PAYLOAD,
+                "username": "auth_xss_signup",
+                "pass": LAB_FIXTURE_SECRETLESS_VALUE,
+            })
+
+        self._assert_payload_is_escaped(response)
+
+    def test_cookie_login_escapes_stored_name(self):
+        stored = authLogin.objects.create(
+            name=XSS_SCRIPT_PAYLOAD,
+            username="auth_xss_cookie",
+            password=LAB_FIXTURE_SECRETLESS_VALUE)
+        self.client.cookies["userid"] = str(stored.userid)
+
+        response = self.client.get("/auth_lab/login")
+
+        self._assert_payload_is_escaped(response)
+
+    def test_post_login_escapes_stored_name(self):
+        authLogin.objects.create(
+            name=XSS_SCRIPT_PAYLOAD,
+            username="auth_xss_post",
+            password=LAB_FIXTURE_SECRETLESS_VALUE)
+
+        response = self.client.post(
+            "/auth_lab/login",
+            {"username": "auth_xss_post", "pass": LAB_FIXTURE_SECRETLESS_VALUE})
+
+        self._assert_payload_is_escaped(response)
+
+    def test_logout_still_renders_confirmation(self):
+        response = self.client.get("/auth_lab/logout")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Logout successful")
 
 
 class MitreLab25ApiViewTests(TestCase):

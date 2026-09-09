@@ -22,10 +22,9 @@ from django.contrib import messages
 from django.contrib.auth import authenticate, login
 from django.contrib.auth.forms import UserCreationForm
 from django.core import serializers, signing
-from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
+from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
 from django.template import loader
-from django.template.loader import render_to_string
 from PIL import Image, ImageMath
 from requests.structures import CaseInsensitiveDict
 
@@ -307,8 +306,14 @@ def auth_lab_signup(request):
             passwd  = request.POST['pass']
             obj = authLogin.objects.create(name=name,username=user_name,password=passwd)
             try:
-                rendered = render_to_string('Lab/AUTH/auth_success.html', {'username': obj.username,'userid':obj.userid,'name':obj.name,'err_msg':'Cookie Set'})
-                response = HttpResponse(rendered)
+                # CWE-79: build the page with the template engine instead of
+                # writing a pre-rendered string into a bare HttpResponse, so the
+                # attacker controlled name/username are HTML escaped by Django's
+                # autoescaping before they are reflected back.
+                response = render(
+                    request,
+                    'Lab/AUTH/auth_success.html',
+                    {'username': obj.username, 'userid': obj.userid, 'name': obj.name, 'err_msg': 'Cookie Set'})
                 response.set_cookie('userid', obj.userid, max_age=31449600, samesite=None, secure=False)
                 print('Setting cookie successful')
                 return response
@@ -321,8 +326,13 @@ def auth_lab_login(request):
     if request.method == 'GET':
         try:
             obj = authLogin.objects.filter(userid=request.COOKIES['userid'])[0]
-            rendered = render_to_string('Lab/AUTH/auth_success.html', {'username': obj.username,'userid':obj.userid,'name':obj.name, 'err_msg':'Login Successful'})
-            response = HttpResponse(rendered)
+            # CWE-79: render through the template engine so the stored (user
+            # supplied) name/username are escaped instead of being streamed
+            # straight to the browser from a bare HttpResponse.
+            response = render(
+                request,
+                'Lab/AUTH/auth_success.html',
+                {'username': obj.username, 'userid': obj.userid, 'name': obj.name, 'err_msg': 'Login Successful'})
             response.set_cookie('userid', obj.userid, max_age=31449600, samesite=None, secure=False)
             print('Login successful')
             return response
@@ -335,8 +345,11 @@ def auth_lab_login(request):
             print(user_name,passwd)
             obj = authLogin.objects.filter(username=user_name,password=passwd)[0]
             try:
-                rendered = render_to_string('Lab/AUTH/auth_success.html', {'username': obj.username,'userid':obj.userid,'name':obj.name, 'err_msg':'Login Successful'})
-                response = HttpResponse(rendered)
+                # CWE-79: same escaping guarantee for the POST login path.
+                response = render(
+                    request,
+                    'Lab/AUTH/auth_success.html',
+                    {'username': obj.username, 'userid': obj.userid, 'name': obj.name, 'err_msg': 'Login Successful'})
                 response.set_cookie('userid', obj.userid, max_age=31449600, samesite=None, secure=False)
                 print('Login successful')
                 return response
@@ -346,8 +359,9 @@ def auth_lab_login(request):
             return render(request,'Lab/AUTH/auth_lab_login.html',{'err_msg':'Check your credentials'})
 
 def auth_lab_logout(request):
-    rendered = render_to_string('Lab/AUTH/auth_lab.html',context={'err_msg':'Logout successful'})
-    response = HttpResponse(rendered)    
+    # CWE-79: no user data here today, but the response is built with the
+    # template engine so any future context value stays escaped.
+    response = render(request, 'Lab/AUTH/auth_lab.html', {'err_msg': 'Logout successful'})
     response.delete_cookie('userid')
     return response
 
