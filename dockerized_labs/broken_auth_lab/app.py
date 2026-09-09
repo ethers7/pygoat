@@ -1,12 +1,25 @@
 from flask import Flask, render_template, request, redirect, url_for, make_response, flash
 import hmac
 import json
+import os
 import secrets
 from datetime import datetime, timedelta
 import base64
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'  # Vulnerable: Hardcoded secret key
+
+# CWE-614: attributes applied to every session cookie this app issues.
+# HttpOnly keeps the cookie out of document.cookie and SameSite=Lax keeps it
+# off cross-site requests, so both are always on. The Secure attribute has to
+# follow the transport actually in use: docker-compose serves this lab over
+# plain http://localhost:5000 (see docker-compose.yml and README.md), and a
+# browser silently drops a Secure cookie on a plaintext origin, so it defaults
+# to off here and is switched on with SESSION_COOKIE_SECURE=true when the app
+# is deployed behind HTTPS.
+SESSION_COOKIE_SECURE = os.environ.get('SESSION_COOKIE_SECURE', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Lax'
 
 # Vulnerable: Storing user data in memory
 users = {
@@ -47,10 +60,16 @@ def login():
         
         if remember_me:
             # Vulnerable: Insecure "Remember Me" implementation
-            response.set_cookie('session', session_token, max_age=30*24*60*60)
+            response.set_cookie('session', session_token, max_age=30*24*60*60,
+                                secure=SESSION_COOKIE_SECURE,
+                                httponly=SESSION_COOKIE_HTTPONLY,
+                                samesite=SESSION_COOKIE_SAMESITE)
         else:
-            response.set_cookie('session', session_token)
-            
+            response.set_cookie('session', session_token,
+                                secure=SESSION_COOKIE_SECURE,
+                                httponly=SESSION_COOKIE_HTTPONLY,
+                                samesite=SESSION_COOKIE_SAMESITE)
+
         return response
     
     flash('Invalid username or password')
@@ -135,6 +154,18 @@ def dashboard():
         pass
     
     return redirect(url_for('lab'))
+
+@app.route('/logout')
+def logout():
+    # The session cookie is HttpOnly, so it can no longer be cleared from
+    # JavaScript (see templates/dashboard.html); expire it on the server with
+    # the same attributes it was issued with.
+    response = make_response(redirect(url_for('lab')))
+    response.delete_cookie('session',
+                           secure=SESSION_COOKIE_SECURE,
+                           httponly=SESSION_COOKIE_HTTPONLY,
+                           samesite=SESSION_COOKIE_SAMESITE)
+    return response
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)  # Vulnerable: Debug mode enabled in production 
