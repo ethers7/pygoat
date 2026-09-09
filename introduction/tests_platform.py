@@ -12,6 +12,8 @@ from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
+from .utility import safe_lookup_target
+
 
 @override_settings(
     DEBUG=True,
@@ -94,3 +96,62 @@ class PlatformRegressionTests(TestCase):
         )
         self.assertEqual(r.status_code, 302)
         self.assertEqual(self.client.get("/").status_code, 200)
+
+
+class CommandInjectionRegressionTests(TestCase):
+    """CWE-78: the lookup labs must never hand user input to a shell.
+
+    These assert the argv + allowlist control, not that injection works.
+    """
+
+    INJECTION_PAYLOADS = (
+        "example.com; id",
+        "example.com && id",
+        "example.com | id",
+        "$(id)",
+        "`id`",
+        "example.com\nid",
+        "-oN/tmp/pwn",
+    )
+
+    def test_allowlist_rejects_shell_metacharacters(self):
+        for payload in self.INJECTION_PAYLOADS:
+            self.assertIsNone(safe_lookup_target(payload), msg=payload)
+
+    def test_allowlist_rejects_empty_and_non_string(self):
+        for value in ("", "   ", None, 1234, ["example.com"]):
+            self.assertIsNone(safe_lookup_target(value), msg=repr(value))
+
+    def test_allowlist_accepts_plain_hosts_and_ips(self):
+        self.assertEqual(safe_lookup_target(" example.com "), "example.com")
+        self.assertEqual(safe_lookup_target("sub.example.co.uk."), "sub.example.co.uk")
+        self.assertEqual(safe_lookup_target("127.0.0.1"), "127.0.0.1")
+        self.assertEqual(safe_lookup_target("::1"), "::1")
+
+    @override_settings(
+        DEBUG=True,
+        STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+    )
+    def test_cmd_lab_rejects_injection_without_executing(self):
+        user = User.objects.create_user(
+            username="cmduser",
+            email="cmduser@example.com",
+            password="Str0ng-Passw0rd!",
+        )
+        self.client.force_login(user)
+        for payload in self.INJECTION_PAYLOADS:
+            r = self.client.post("/cmd_lab", {"domain": payload, "os": "linux"})
+            self.assertEqual(r.status_code, 200, msg=payload)
+            self.assertContains(r, "Invalid domain", msg_prefix=payload)
+
+    def test_mitre_lab_17_api_rejects_injection_without_executing(self):
+        for payload in self.INJECTION_PAYLOADS:
+            r = self.client.post("/mitre/17/lab/api", {"ip": payload})
+            self.assertEqual(r.status_code, 400, msg=payload)
+            self.assertEqual(r.json()["ports"], [], msg=payload)
+
+    def test_command_out_refuses_command_strings(self):
+        from .mitre import command_out
+
+        with self.assertRaises(TypeError):
+            command_out("nmap 127.0.0.1; id")

@@ -1,8 +1,41 @@
 import hashlib
+import ipaddress
 import os
+import re
 import uuid
 
 from .models import *
+
+
+# Hostname / IP allowlist for the lookup commands (dig, nslookup, nmap). The
+# validated value is passed as a single argv element with shell=False, so this
+# only has to reject non-host shapes and leading "-" option injection.
+_LOOKUP_TARGET_RE = re.compile(
+    r'^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?'
+    r'(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$'
+)
+
+
+def safe_lookup_target(value):
+    """Return a validated hostname/IP address, or None when the value is not one.
+
+    Callers must treat None as "reject the request" and must pass the returned
+    value as its own argv element (never through a shell), so that shell
+    metacharacters can never be interpreted as command syntax.
+    """
+    if not isinstance(value, str):
+        return None
+    target = value.strip()
+    if not target:
+        return None
+    try:
+        return str(ipaddress.ip_address(target))
+    except ValueError:
+        pass
+    target = target.rstrip('.')
+    if _LOOKUP_TARGET_RE.match(target):
+        return target
+    return None
 
 
 # import re

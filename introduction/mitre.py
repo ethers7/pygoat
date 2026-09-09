@@ -9,6 +9,7 @@ from django.shortcuts import redirect, render
 from django.views.decorators.csrf import csrf_exempt
 
 from .models import CSRF_user_tbl
+from .utility import safe_lookup_target
 from .views import authentication_decorator
 
 # import os
@@ -230,15 +231,28 @@ def mitre_lab_17(request):
     return render(request, 'mitre/mitre_lab_17.html')
 
 def command_out(command):
-    process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    """Run an argv sequence without a shell.
+
+    `command` must be a list/tuple of arguments; shell=False means no element is
+    ever parsed as shell syntax. A string is rejected so no caller can
+    reintroduce shell interpolation.
+    """
+    if isinstance(command, (str, bytes)):
+        raise TypeError("command_out() requires an argv list, not a command string")
+    process = subprocess.Popen(list(command), shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return process.communicate()
     
 
 @csrf_exempt
 def mitre_lab_17_api(request):
     if request.method == "POST":
-        ip = request.POST.get('ip')
-        command = "nmap " + ip 
+        ip = safe_lookup_target(request.POST.get('ip'))
+        if ip is None:
+            return JsonResponse(
+                {'raw_res': '', 'raw_err': 'Invalid scan target', 'ports': []},
+                status=400,
+            )
+        command = ["nmap", ip]
         res, err = command_out(command)
         res = res.decode()
         err = err.decode()
