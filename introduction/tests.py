@@ -584,14 +584,14 @@ class LabFileWriteViewTests(TestCase):
         self.assertEqual(response.status_code, 302)
         blog_id = response["Location"].rsplit("/", 1)[-1]
         written = os.path.join(
-            _INTRODUCTION_DIR, *BLOGS_RELATIVE_DIR.split("/"), "%s.html" % blog_id)
+            _INTRODUCTION_DIR, *BLOGS_RELATIVE_DIR.split("/"), "%s.txt" % blog_id)
         self.addCleanup(os.remove, written)
         with open(written, encoding="utf-8", newline="") as handle:
             body = handle.read()
 
         self.assertNotIn("\r", body)
         self.assertNotIn("\x00", body)
-        self.assertIn("hello\nworld!", body)
+        self.assertEqual(body, "hello\nworld!")
 
     def test_oversized_blog_is_rejected_without_writing_a_file(self):
         blogs_dir = os.path.join(_INTRODUCTION_DIR, *BLOGS_RELATIVE_DIR.split("/"))
@@ -639,6 +639,91 @@ class LabFileWriteViewTests(TestCase):
         self.assertEqual(response.json()["message"], "success")
         mocked_write.assert_called_once_with(
             "playground/A6/utility.py", "def check_vuln(packages):\n    return []\n")
+
+
+class SstiBlogRenderingTests(TestCase):
+    """The stored blog must come back escaped, as data (CWE-79).
+
+    The submitted body used to be concatenated into Django template source
+    ("{% extends ... %}" + blog) that was written to disk and then rendered as a
+    template, so submitted markup was served as live HTML and template tags were
+    executed. The body is now stored as plain text and printed by
+    ``ssti_blog.html`` through the template engine.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="ssti_blog_tester")
+        self.client.force_login(self.user)
+
+    def _post_blog(self, body):
+        """Store a blog and return its id, removing the stored file afterwards."""
+        response = self.client.post("/ssti/lab", {"blog": body})
+
+        self.assertEqual(response.status_code, 302)
+        blog_id = response["Location"].rsplit("/", 1)[-1]
+        self.addCleanup(os.remove, self._stored_path(blog_id))
+        return blog_id
+
+    @staticmethod
+    def _stored_path(blog_id):
+        return os.path.join(
+            _INTRODUCTION_DIR, *BLOGS_RELATIVE_DIR.split("/"), "%s.txt" % blog_id)
+
+    def test_script_payload_comes_back_escaped(self):
+        blog_id = self._post_blog(XSS_SCRIPT_PAYLOAD)
+
+        response = self.client.get("/ssti/blog/%s" % blog_id)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, XSS_SCRIPT_PAYLOAD)
+        self.assertNotContains(response, "<script>alert")
+        self.assertContains(response, ESCAPED_SCRIPT_PREFIX)
+
+    def test_stored_blog_is_plain_text_not_template_source(self):
+        blog_id = self._post_blog(XSS_SCRIPT_PAYLOAD)
+
+        with open(self._stored_path(blog_id), encoding="utf-8") as handle:
+            stored = handle.read()
+
+        self.assertEqual(stored, XSS_SCRIPT_PAYLOAD)
+        self.assertNotIn("{% extends", stored)
+        self.assertNotIn("{% block", stored)
+
+    def test_template_syntax_in_a_blog_is_not_evaluated(self):
+        blog_id = self._post_blog("{{ 7 * 191 }} and {{ settings.SECRET_KEY }}")
+
+        response = self.client.get("/ssti/blog/%s" % blog_id)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "1337")
+        self.assertContains(response, "{{ 7 * 191 }}")
+
+    def test_blog_body_is_still_served_to_its_author(self):
+        blog_id = self._post_blog("a harmless blog body")
+
+        response = self.client.get("/ssti/blog/%s" % blog_id)
+
+        self.assertContains(response, "a harmless blog body")
+
+    def test_unknown_blog_is_refused_instead_of_loading_a_template(self):
+        response = self.client.get("/ssti/blog/does-not-exist")
+
+        self.assertContains(response, "No blog found", status_code=404)
+
+    def test_blog_reader_stays_inside_the_lab_blog_directory(self):
+        from .views import (SSTI_BLOG_DIR, SSTI_BLOG_EXTENSION,
+                            ssti_blog_relative_path)
+
+        for payload in ("../../../../manage.py",
+                        "../../../../../../etc/passwd",
+                        "/etc/passwd",
+                        "../ssti_lab"):
+            with self.subTest(payload=payload):
+                self.assertIsNone(
+                    read_lab_file(
+                        ssti_blog_relative_path(payload),
+                        allowed_dirs=(SSTI_BLOG_DIR,),
+                        allowed_extensions=(SSTI_BLOG_EXTENSION,)))
 
 
 class A6DependencyCheckerTests(SimpleTestCase):

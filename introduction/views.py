@@ -1047,6 +1047,28 @@ def ssrf_lab2(request):
             return render(request, "Lab/ssrf/ssrf_lab2.html", {"error": "Invalid URL"})
 #--------------------------------------- Server-side template injection --------------------------------------#
 
+# The blog editor stores the body a reader submits and serves it back. That body
+# is untrusted data, so it is kept as plain text inside the lab's own blog
+# directory and printed by SSTI_BLOG_TEMPLATE through the template engine, which
+# escapes it. It is never concatenated into template/HTML source and never
+# marked safe.
+SSTI_BLOG_DIR = "templates/Lab_2021/A3_Injection/Blogs"
+SSTI_BLOG_EXTENSION = ".txt"
+SSTI_BLOG_TEMPLATE = "Lab_2021/A3_Injection/ssti_blog.html"
+# Shown for every blog that cannot be served: a destination outside the lab's
+# blog directory and a name that does not exist get the same answer.
+SSTI_BLOG_NOT_FOUND = "No blog found"
+
+
+def ssti_blog_relative_path(blog_id):
+    """Return the lab-relative path of the stored body of blog_id.
+
+    The value is only a candidate: the read/write guards resolve it and refuse
+    anything that does not land directly in the lab's blog directory.
+    """
+    return "%s/%s%s" % (SSTI_BLOG_DIR, blog_id, SSTI_BLOG_EXTENSION)
+
+
 def ssti(request):
     if request.user.is_authenticated:
         return render(request,"Lab_2021/A3_Injection/ssti.html")
@@ -1059,11 +1081,18 @@ def ssti_lab(request):
             users_blogs = Blogs.objects.filter(author=request.user)
             return render(request,"Lab_2021/A3_Injection/ssti_lab.html", {"blogs":users_blogs})
         elif request.method=="POST":
-            # The blog body is request data written to a file on disk, so it is
-            # neutralised before the write (CWE-93): safe_lab_text() folds CR/CRLF
-            # to LF, drops the remaining control characters and bounds the size,
-            # and write_lab_file() confines the destination to the lab's own Blogs
-            # directory. The raw request value is never written.
+            # The blog body is request data. It used to be concatenated into
+            # Django template source - "{% extends ... %}" + blog + "{% endblock %}"
+            # - that was written to disk and then rendered as a template, so any
+            # markup a reader submitted came back as live HTML (stored cross-site
+            # scripting, CWE-79) and any template tag was executed as well. No
+            # HTML is built by string formatting here any more: the body is
+            # stored as plain text and ssti_view_blog() hands it to a fixed
+            # template as context data, so the engine escapes it.
+            # The write itself stays guarded (CWE-93): safe_lab_text() folds
+            # CR/CRLF to LF, drops the remaining control characters and bounds
+            # the size, and write_lab_file() confines the destination to the
+            # lab's own Blogs directory. The raw request value is never written.
             try:
                 blog = safe_lab_text(request.POST["blog"])
             except ValueError as rejected:
@@ -1077,15 +1106,9 @@ def ssti_lab(request):
             id = str(uuid.uuid4()).split('-')[-1]
 
             blog = filter_blog(blog)
-            prepend_code = "{% extends 'introduction/base.html' %}\
-                {% block content %}{% block title %}\
-                <title>SSTI-Blogs</title>\
-                {% endblock %}"
-            
-            blog = prepend_code + blog + "{% endblock %}"
             new_blog = Blogs.objects.create(author = request.user, blog_id = id)
             new_blog.save()
-            write_lab_file(f"templates/Lab_2021/A3_Injection/Blogs/{id}.html", blog)
+            write_lab_file(ssti_blog_relative_path(id), blog)
             return redirect(f'blog/{id}')
     else:
         return redirect('login')
@@ -1094,7 +1117,21 @@ def ssti_lab(request):
 def ssti_view_blog(request,blog_id):
     if request.user.is_authenticated:
         if request.method=="GET":
-            return render(request,f"Lab_2021/A3_Injection/Blogs/{blog_id}.html")
+            # blog_id comes from the URL. Rendering
+            # "Blogs/<blog_id>.html" made the stored body part of the template
+            # that was executed, which is what turned a submitted <script> into
+            # a live one. The body is read back as data instead - read_lab_file()
+            # confines the read to the lab's blog directory and reports a refused
+            # destination exactly like a missing blog (CWE-22) - and printed by a
+            # fixed template, so the engine escapes whatever it contains.
+            blog = read_lab_file(
+                ssti_blog_relative_path(blog_id),
+                allowed_dirs=(SSTI_BLOG_DIR,),
+                allowed_extensions=(SSTI_BLOG_EXTENSION,))
+            if blog is None:
+                return render(request, SSTI_BLOG_TEMPLATE,
+                              {"error": SSTI_BLOG_NOT_FOUND}, status=404)
+            return render(request, SSTI_BLOG_TEMPLATE, {"blog": blog})
         elif request.method=="POST":
             return HttpResponseBadRequest()
 
